@@ -778,13 +778,6 @@ html, body {
   font-size: 13px;
 }
 
-/* ── Whimsy count number in speak button ── */
-.ctrl-btn.whimsy-count .ctrl-btn-icon {
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--gold);
-  line-height: 1;
-}
 
 /* ── TTS speaking indicator ── */
 .tts-bar {
@@ -810,6 +803,45 @@ html, body {
 @keyframes tts-bounce {
   0%, 100% { transform: scaleY(0.6); }
   50% { transform: scaleY(1); }
+}
+
+/* ── Voice language picker row ── */
+.voice-lang-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  margin: 0 0 2px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.03);
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.voice-lang-row.focused {
+  background: var(--surface-focus);
+  border-color: var(--gold-dim);
+}
+
+.voice-lang-label {
+  font-size: 13px;
+  color: var(--white-80);
+  font-weight: 500;
+  flex: 1;
+  text-align: center;
+}
+
+.voice-lang-row.focused .voice-lang-label {
+  color: var(--white);
+}
+
+.voice-lang-arrow {
+  font-size: 18px;
+  color: var(--gold);
+  padding: 0 8px;
+  cursor: pointer;
+  user-select: none;
+  line-height: 1;
 }
 
 /* ── Display settings screen ── */

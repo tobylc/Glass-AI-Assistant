@@ -87,55 +87,87 @@ const TRANSLATIONS = [
   { id: "webbe",  name: "World English Bible (British)",       year: "2000", note: "UK spelling" },
 ];
 
-// ── Whimsical preparing sequence (phrase ↔ countdown) ─────────
+// ── Whimsical preparing sequence ────────────────────────────────
 const WHIMSY_SEQ = [
-  { t: "phrase", s: "Preparing" },
-  { t: "count",  s: "3" },
-  { t: "phrase", s: "Building layers" },
-  { t: "count",  s: "2" },
-  { t: "phrase", s: "Adding fishing line" },
-  { t: "count",  s: "1" },
-  { t: "phrase", s: "Saving dolphins" },
-  { t: "count",  s: "3" },
-  { t: "phrase", s: "Tuning frequencies" },
-  { t: "count",  s: "2" },
-  { t: "phrase", s: "Consulting the whales" },
-  { t: "count",  s: "1" },
-  { t: "phrase", s: "Polishing vowels" },
-  { t: "count",  s: "3" },
-  { t: "phrase", s: "Waking the neurons" },
-  { t: "count",  s: "2" },
-  { t: "phrase", s: "Herding syllables" },
-  { t: "count",  s: "1" },
-  { t: "phrase", s: "Aligning the stars" },
-  { t: "count",  s: "3" },
-  { t: "phrase", s: "Charging the crystals" },
-  { t: "count",  s: "2" },
-  { t: "phrase", s: "Untangling the grammar" },
-  { t: "count",  s: "1" },
-  { t: "phrase", s: "Befriending the bytes" },
-  { t: "count",  s: "3" },
-  { t: "phrase", s: "Warming up the vibes" },
-  { t: "count",  s: "2" },
-  { t: "phrase", s: "Almost there" },
-  { t: "count",  s: "1" },
+  "Preparing",
+  "Building layers",
+  "Adding fishing line",
+  "Saving dolphins",
+  "Tuning frequencies",
+  "Consulting the whales",
+  "Polishing vowels",
+  "Waking the neurons",
+  "Herding syllables",
+  "Aligning the stars",
+  "Charging the crystals",
+  "Untangling the grammar",
+  "Befriending the bytes",
+  "Warming up the vibes",
+  "Almost there",
+];
+
+// ── Kokoro languages ───────────────────────────────────────────
+const KOKORO_LANGUAGES = [
+  { id: "en-us", flag: "🇺🇸", label: "English (US)" },
+  { id: "en-gb", flag: "🇬🇧", label: "English (UK)" },
+  { id: "ja",    flag: "🇯🇵", label: "Japanese" },
+  { id: "zh",    flag: "🇨🇳", label: "Chinese" },
+  { id: "es",    flag: "🇪🇸", label: "Spanish" },
+  { id: "fr",    flag: "🇫🇷", label: "French" },
+  { id: "hi",    flag: "🇮🇳", label: "Hindi" },
+  { id: "it",    flag: "🇮🇹", label: "Italian" },
+  { id: "pt",    flag: "🇧🇷", label: "Portuguese" },
 ];
 
 // ── Kokoro voices ─────────────────────────────────────────────
 const KOKORO_VOICES = [
-  { id: "af_heart",   name: "Grace",    accent: "American", gender: "Female", note: "Warm" },
-  { id: "af_bella",   name: "Bella",    accent: "American", gender: "Female", note: "Smooth" },
-  { id: "af_sarah",   name: "Sarah",    accent: "American", gender: "Female", note: "Clear" },
-  { id: "af_nicole",  name: "Nicole",   accent: "American", gender: "Female", note: "Soft" },
-  { id: "am_adam",    name: "Adam",     accent: "American", gender: "Male",   note: "Calm" },
-  { id: "am_michael", name: "Michael",  accent: "American", gender: "Male",   note: "Deep" },
-  { id: "bf_emma",    name: "Emma",     accent: "British",  gender: "Female", note: "Refined" },
-  { id: "bf_isabella",name: "Isabella", accent: "British",  gender: "Female", note: "Elegant" },
-  { id: "bm_george",  name: "George",   accent: "British",  gender: "Male",   note: "Rich" },
-  { id: "bm_lewis",   name: "Lewis",    accent: "British",  gender: "Male",   note: "Crisp" },
+  // 🇺🇸 American English
+  { id: "af_heart",      name: "Grace",    gender: "Female", note: "Warm",    lang: "en-us" },
+  { id: "af_bella",      name: "Bella",    gender: "Female", note: "Smooth",  lang: "en-us" },
+  { id: "af_sarah",      name: "Sarah",    gender: "Female", note: "Clear",   lang: "en-us" },
+  { id: "af_nicole",     name: "Nicole",   gender: "Female", note: "Soft",    lang: "en-us" },
+  { id: "af_sky",        name: "Sky",      gender: "Female", note: "Bright",  lang: "en-us" },
+  { id: "am_adam",       name: "Adam",     gender: "Male",   note: "Calm",    lang: "en-us" },
+  { id: "am_michael",    name: "Michael",  gender: "Male",   note: "Deep",    lang: "en-us" },
+  // 🇬🇧 British English
+  { id: "bf_emma",       name: "Emma",     gender: "Female", note: "Refined", lang: "en-gb" },
+  { id: "bf_isabella",   name: "Isabella", gender: "Female", note: "Elegant", lang: "en-gb" },
+  { id: "bm_george",     name: "George",   gender: "Male",   note: "Rich",    lang: "en-gb" },
+  { id: "bm_lewis",      name: "Lewis",    gender: "Male",   note: "Crisp",   lang: "en-gb" },
+  // 🇯🇵 Japanese
+  { id: "jf_alpha",      name: "Hana",     gender: "Female", note: "Bright",  lang: "ja" },
+  { id: "jf_gongitsune", name: "Kitsune",  gender: "Female", note: "Gentle",  lang: "ja" },
+  { id: "jf_nezumi",     name: "Nezumi",   gender: "Female", note: "Soft",    lang: "ja" },
+  { id: "jm_kumo",       name: "Kumo",     gender: "Male",   note: "Deep",    lang: "ja" },
+  // 🇨🇳 Chinese (Mandarin)
+  { id: "zf_xiaobei",    name: "Xiaobei",  gender: "Female", note: "Warm",    lang: "zh" },
+  { id: "zf_xiaoni",     name: "Xiaoni",   gender: "Female", note: "Soft",    lang: "zh" },
+  { id: "zm_yunxi",      name: "Yunxi",    gender: "Male",   note: "Clear",   lang: "zh" },
+  { id: "zm_yunyang",    name: "Yunyang",  gender: "Male",   note: "Steady",  lang: "zh" },
+  // 🇪🇸 Spanish
+  { id: "ef_dora",       name: "Dora",     gender: "Female", note: "Bright",  lang: "es" },
+  { id: "em_alex",       name: "Alex",     gender: "Male",   note: "Warm",    lang: "es" },
+  // 🇫🇷 French
+  { id: "ff_siwis",      name: "Siwis",    gender: "Female", note: "Elegant", lang: "fr" },
+  // 🇮🇳 Hindi
+  { id: "hf_alpha",      name: "Priya",    gender: "Female", note: "Warm",    lang: "hi" },
+  { id: "hf_beta",       name: "Ananya",   gender: "Female", note: "Soft",    lang: "hi" },
+  { id: "hm_omega",      name: "Arjun",    gender: "Male",   note: "Deep",    lang: "hi" },
+  // 🇮🇹 Italian
+  { id: "if_sara",       name: "Sara",     gender: "Female", note: "Melodic", lang: "it" },
+  { id: "im_nicola",     name: "Nicola",   gender: "Male",   note: "Rich",    lang: "it" },
+  // 🇧🇷 Portuguese
+  { id: "pf_dora",       name: "Dora",     gender: "Female", note: "Warm",    lang: "pt" },
+  { id: "pm_alex",       name: "Alex",     gender: "Male",   note: "Calm",    lang: "pt" },
 ];
-// Flat index helpers: voice list idx 0 = Standard, idx 1-10 = KOKORO_VOICES[0-9]
-const VOICE_COUNT = 1 + KOKORO_VOICES.length; // 11
+
+// Dynamic voice count based on language filter
+function filteredKokoroVoices() {
+  return KOKORO_VOICES.filter(v => v.lang === state.kokoroLang);
+}
+function voiceCount() {
+  return 1 + filteredKokoroVoices().length; // Standard + filtered Kokoro
+}
 
 // ── Display / appearance settings ────────────────────────────
 const DISPLAY_SETTINGS = [
@@ -167,7 +199,9 @@ const state = {
   translation: "asv",   // active translation ID
   translationIdx: 0,    // focused row in translations screen
   voiceMode: "standard",   // "standard" | "ai"
-  voiceIdx: 0,             // focused row in voice screen
+  voiceIdx: 0,             // focused row in voice screen (0=Standard, 1+=filtered Kokoro)
+  voiceLangFocused: false, // true when language picker row is focused
+  kokoroLang: "en-us",     // Kokoro language filter
   aiTtsStatus: "idle",     // "idle" | "loading" | "ready" | "error"
   aiTtsProgress: 0,        // 0–100 download progress
   aiVoiceId: "af_heart",   // Kokoro voice id
@@ -716,16 +750,55 @@ document.addEventListener("keydown", (e) => {
   }
 
   if (state.screen === "voice") {
-    if (key === "ArrowDown") {
-      state.voiceIdx = Math.min(state.voiceIdx + 1, VOICE_COUNT - 1);
-      render();
-    } else if (key === "ArrowUp") {
-      state.voiceIdx = Math.max(state.voiceIdx - 1, 0);
-      render();
-    } else if (key === "Enter" || key === "ArrowRight") {
-      selectVoiceIdx(state.voiceIdx);
-    } else if (key === "Escape" || key === "ArrowLeft") {
-      navigate("home");
+    const fkv = filteredKokoroVoices();
+    const maxIdx = fkv.length; // 0=Standard, 1..fkv.length=Kokoro
+    if (state.voiceLangFocused) {
+      // Language picker row is active — ←→ cycle language, ↑↓ exit
+      if (key === "ArrowLeft") {
+        const li = KOKORO_LANGUAGES.findIndex(l => l.id === state.kokoroLang);
+        state.kokoroLang = KOKORO_LANGUAGES[(li - 1 + KOKORO_LANGUAGES.length) % KOKORO_LANGUAGES.length].id;
+        state.voiceIdx = 1;
+        render();
+      } else if (key === "ArrowRight") {
+        const li = KOKORO_LANGUAGES.findIndex(l => l.id === state.kokoroLang);
+        state.kokoroLang = KOKORO_LANGUAGES[(li + 1) % KOKORO_LANGUAGES.length].id;
+        state.voiceIdx = 1;
+        render();
+      } else if (key === "ArrowUp") {
+        state.voiceLangFocused = false;
+        state.voiceIdx = 0;
+        render();
+      } else if (key === "ArrowDown") {
+        state.voiceLangFocused = false;
+        state.voiceIdx = 1;
+        render();
+      } else if (key === "Escape" || key === "ArrowLeft") {
+        navigate("home");
+      }
+    } else {
+      if (key === "ArrowDown") {
+        if (state.voiceIdx === 0) {
+          // Standard → lang row
+          state.voiceLangFocused = true;
+          render();
+        } else {
+          state.voiceIdx = Math.min(state.voiceIdx + 1, maxIdx);
+          render();
+        }
+      } else if (key === "ArrowUp") {
+        if (state.voiceIdx === 1) {
+          // First Kokoro → lang row
+          state.voiceLangFocused = true;
+          render();
+        } else {
+          state.voiceIdx = Math.max(state.voiceIdx - 1, 0);
+          render();
+        }
+      } else if (key === "Enter" || key === "ArrowRight") {
+        selectVoiceIdx(state.voiceIdx);
+      } else if (key === "Escape" || key === "ArrowLeft") {
+        navigate("home");
+      }
     }
     return;
   }
@@ -874,7 +947,13 @@ document.addEventListener("wheel", (e) => {
     state.listIdx = Math.max(0, Math.min(state.listIdx + dir, 3));
     render();
   } else if (state.screen === "voice") {
-    state.voiceIdx = Math.max(0, Math.min(state.voiceIdx + dir, VOICE_COUNT - 1));
+    if (state.voiceLangFocused) {
+      const li = KOKORO_LANGUAGES.findIndex(l => l.id === state.kokoroLang);
+      state.kokoroLang = KOKORO_LANGUAGES[(li + dir + KOKORO_LANGUAGES.length) % KOKORO_LANGUAGES.length].id;
+      state.voiceIdx = 1;
+    } else {
+      state.voiceIdx = Math.max(0, Math.min(state.voiceIdx + dir, voiceCount() - 1));
+    }
     render();
   } else if (state.screen === "books") {
     state.listIdx = Math.max(0, Math.min(state.listIdx + dir, BOOKS.length - 1));
@@ -915,19 +994,22 @@ function selectVoiceIdx(idx) {
   if (idx === 0) {
     state.voiceMode = "standard";
   } else {
-    const kv = KOKORO_VOICES[idx - 1];
+    const fkv = filteredKokoroVoices();
+    const kv = fkv[idx - 1];
     if (kv) {
       state.voiceMode = "ai";
       state.aiVoiceId = kv.id;
       if (state.aiTtsStatus === "idle") loadKokoroModel();
     }
   }
+  state.voiceLangFocused = false;
   navigate("home");
 }
 
 function currentVoiceIdx() {
   if (state.voiceMode === "standard") return 0;
-  const ki = KOKORO_VOICES.findIndex(v => v.id === state.aiVoiceId);
+  const fkv = filteredKokoroVoices();
+  const ki = fkv.findIndex(v => v.id === state.aiVoiceId);
   return ki >= 0 ? ki + 1 : 1;
 }
 
@@ -1018,10 +1100,9 @@ function renderTranslations() {
 }
 
 function renderVoice() {
-  const VISIBLE = 7;
+  const VISIBLE = 6;
+  const fkv = filteredKokoroVoices();
   const activeIdx = currentVoiceIdx();
-
-  // Build flat list: [Standard, ...KOKORO_VOICES]
   const aiStatus = state.aiTtsStatus;
   const aiSub = {
     idle:    "~86 MB · one-time download",
@@ -1030,24 +1111,48 @@ function renderVoice() {
     error:   "Failed · tap to retry",
   }[aiStatus];
 
-  const allItems = [
-    { idx: 0,  label: "Standard",  sub: "Browser built-in · instant", badge: null },
-    ...KOKORO_VOICES.map((v, i) => ({
-      idx: i + 1,
-      label: v.name,
-      sub: `${v.accent} ${v.gender} · ${v.note}`,
-      badge: i === 0 ? aiSub : null,   // only show status on first AI entry
-      loading: i === 0 && aiStatus === "loading",
-      progress: state.aiTtsProgress,
-    })),
-  ];
+  // Current language info
+  const activeLang = KOKORO_LANGUAGES.find(l => l.id === state.kokoroLang) || KOKORO_LANGUAGES[0];
+  const langIdx = KOKORO_LANGUAGES.indexOf(activeLang);
+  const prevLang = KOKORO_LANGUAGES[(langIdx - 1 + KOKORO_LANGUAGES.length) % KOKORO_LANGUAGES.length];
+  const nextLang = KOKORO_LANGUAGES[(langIdx + 1) % KOKORO_LANGUAGES.length];
 
-  // Sliding window: keep focused item near center
-  const offset = Math.max(0, Math.min(state.voiceIdx - Math.floor(VISIBLE / 2), VOICE_COUNT - VISIBLE));
-  const visible = allItems.slice(offset, offset + VISIBLE);
+  // Voice items: Standard + filtered Kokoro
+  const kokoroItems = fkv.map((v, i) => ({
+    idx: i + 1,
+    label: v.name,
+    sub: `${v.gender} · ${v.note}`,
+    badge: i === 0 ? aiSub : null,
+    loading: i === 0 && aiStatus === "loading",
+    progress: state.aiTtsProgress,
+  }));
 
-  // Section divider: show "── AI Voices ──" between Standard and first Kokoro entry
-  const showDivider = offset === 0; // only when Standard is visible
+  // Sliding window over Kokoro voices only (Standard always visible at top)
+  const kokoroOffset = Math.max(0, Math.min(state.voiceIdx - 2, fkv.length - (VISIBLE - 1)));
+  const visibleKokoro = kokoroItems.slice(kokoroOffset, kokoroOffset + VISIBLE - 1);
+
+  // Language picker row
+  const langRow = el("div", {
+    class: `voice-lang-row${state.voiceLangFocused ? " focused" : ""}`,
+  },
+    el("span", {
+      class: "voice-lang-arrow",
+      onclick: () => {
+        state.kokoroLang = prevLang.id;
+        state.voiceIdx = 1;
+        render();
+      }
+    }, "‹"),
+    el("span", { class: "voice-lang-label" }, `${activeLang.flag} ${activeLang.label}`),
+    el("span", {
+      class: "voice-lang-arrow",
+      onclick: () => {
+        state.kokoroLang = nextLang.id;
+        state.voiceIdx = 1;
+        render();
+      }
+    }, "›"),
+  );
 
   return el("div", { class: "screen active" },
     el("div", { class: "screen-header" },
@@ -1056,16 +1161,27 @@ function renderVoice() {
       el("div", { class: "screen-subtitle" }, "Free · On-device"),
     ),
     el("div", { class: "voice-list" },
-      ...visible.map((item, visI) => {
+      // ── Instant Voices ──
+      el("div", { class: "voice-divider" }, "Instant · Browser"),
+      el("div", { class: "voice-group" },
+        el("div", {
+          class: `voice-option${state.voiceIdx === 0 && !state.voiceLangFocused ? " focused" : ""}${activeIdx === 0 ? " active-voice" : ""}`,
+          onclick: () => { state.voiceIdx = 0; selectVoiceIdx(0); }
+        },
+          el("div", { class: "voice-check" }, activeIdx === 0 ? "✓" : ""),
+          el("div", { class: "voice-info" },
+            el("div", { class: "voice-name" }, "Standard"),
+            el("div", { class: "voice-sub" }, "Browser built-in · instant"),
+          ),
+        )
+      ),
+      // ── AI Voices · Kokoro ──
+      el("div", { class: "voice-divider" }, "AI Voices · Kokoro"),
+      langRow,
+      ...visibleKokoro.map(item => {
         const isActive = item.idx === activeIdx;
-        const isFocused = item.idx === state.voiceIdx;
-        const isStandard = item.idx === 0;
-        const isFirstKokoro = item.idx === 1;
+        const isFocused = item.idx === state.voiceIdx && !state.voiceLangFocused;
         return el("div", { class: "voice-group" },
-          // Divider between Standard and AI voices
-          showDivider && isFirstKokoro
-            ? el("div", { class: "voice-divider" }, "AI Voices · Kokoro")
-            : null,
           el("div", {
             class: `voice-option${isFocused ? " focused" : ""}${isActive ? " active-voice" : ""}`,
             onclick: () => { state.voiceIdx = item.idx; selectVoiceIdx(item.idx); }
@@ -1089,8 +1205,8 @@ function renderVoice() {
     ),
     keysHint([
       { keys: ["↑↓"], label: "scroll" },
+      { keys: ["←→"], label: state.voiceLangFocused ? "change lang" : "back / select" },
       { keys: ["↵"], label: "select" },
-      { keys: ["←"], label: "back" },
     ])
   );
 }
@@ -1177,15 +1293,13 @@ function renderReading() {
 
   // TTS button icon/label
   const aiLoading = state.voiceMode === "ai" && state.aiTtsStatus === "loading";
-  const whimsyItem = WHIMSY_SEQ[state.whimsyStep % WHIMSY_SEQ.length];
-  const isWhimsyCount = state.aiPreparing && whimsyItem.t === "count";
+  const whimsyPhrase = WHIMSY_SEQ[state.whimsyStep % WHIMSY_SEQ.length];
   const ttsIcon = state.aiPreparing
-    ? (isWhimsyCount ? whimsyItem.s : "·")
+    ? "·"
     : (state.speaking ? "◼" : (aiLoading ? "⏳" : "♪"));
   const ttsLabel = state.aiPreparing
-    ? (isWhimsyCount ? "" : whimsyItem.s)
+    ? whimsyPhrase
     : (state.speaking ? "Stop" : (aiLoading ? `${state.aiTtsProgress}%` : "Listen"));
-  const ttsWhimsyCount = isWhimsyCount;
 
   // Pagination dots
   const dots = state.totalPages > 1
@@ -1226,7 +1340,7 @@ function renderReading() {
             )]
           : []),
         el("div", {
-          class: `ctrl-btn${state.readingFocus === "speak" ? " focused" : ""}${state.speaking ? " active" : ""}${ttsWhimsyCount ? " whimsy-count" : ""}`,
+          class: `ctrl-btn${state.readingFocus === "speak" ? " focused" : ""}${state.speaking ? " active" : ""}`,
           onclick: toggleTTS
         },
           el("span", { class: "ctrl-btn-icon" }, ttsIcon),
