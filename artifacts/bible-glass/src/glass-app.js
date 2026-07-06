@@ -123,7 +123,7 @@ const WHIMSY_SEQ = [
 
 // ── Kokoro voices ─────────────────────────────────────────────
 const KOKORO_VOICES = [
-  { id: "af_heart",   name: "Heart",    accent: "American", gender: "Female", note: "Warm · default" },
+  { id: "af_heart",   name: "Grace",    accent: "American", gender: "Female", note: "Warm" },
   { id: "af_bella",   name: "Bella",    accent: "American", gender: "Female", note: "Smooth" },
   { id: "af_sarah",   name: "Sarah",    accent: "American", gender: "Female", note: "Clear" },
   { id: "af_nicole",  name: "Nicole",   accent: "American", gender: "Female", note: "Soft" },
