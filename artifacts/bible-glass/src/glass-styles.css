@@ -333,6 +333,14 @@ html, body {
   color: var(--gold);
 }
 
+.ctrl-btn:active {
+  background: var(--gold-dim);
+  border-color: var(--gold);
+  color: var(--gold);
+  transform: scale(0.94);
+  transition: transform 0.05s, background 0.05s;
+}
+
 .ctrl-btn.focused {
   border-color: var(--gold);
   color: var(--gold);

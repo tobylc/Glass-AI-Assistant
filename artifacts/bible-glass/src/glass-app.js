@@ -271,14 +271,10 @@ async function continueTTS() {
   state.loading = false;
   render();
 
-  // Start background prefetch for the new chapter's audio
-  prefetchChapterAudio();
-
   if (state.voiceMode === "ai") {
-    // Queue page-1 generation (instant if prefetched)
-    const pageEnd = Math.min(VERSES_PER_PAGE, verses.length);
-    const audioPromises = Array.from({ length: pageEnd }, (_, i) => genAudio(kokoroInstance, i));
-    playKokoroVerse(0, 0, audioPromises);
+    // Queue ALL verses for the new chapter upfront — same pipeline as startKokoroTTS
+    const allPromises = verses.map((_, i) => genAudio(kokoroInstance, i));
+    playKokoroVerse(0, allPromises);
   } else {
     speakVerse(0);
   }
@@ -444,9 +440,8 @@ async function prefetchChapterAudio() {
 
   for (let i = 0; i < state.verses.length; i++) {
     if (prefetchToken !== token) return; // chapter or voice changed
-    if (state.speaking) { await new Promise(r => setTimeout(r, 300)); i--; continue; }
-    await genAudio(tts, i); // no-op if already cached
-    await new Promise(r => setTimeout(r, 80)); // yield between verses
+    await genAudio(tts, i); // no-op if already cached; serializes through generationBusy
+    await new Promise(r => setTimeout(r, 20)); // yield to event loop between verses
   }
 }
 
@@ -466,8 +461,8 @@ function stopWhimsyTimer() {
   state.whimsyStep = 0;
 }
 
-// Play a verse; audioPromises is the full pre-generated queue for the page batch
-async function playKokoroVerse(idx, pageStart, audioPromises) {
+// Play a verse; allPromises covers the entire chapter (indexed by verse position)
+async function playKokoroVerse(idx, allPromises) {
   if (idx >= state.verses.length) { if (ttsActive) continueTTS(); return; }
   if (!ttsActive) return;
 
@@ -484,18 +479,12 @@ async function playKokoroVerse(idx, pageStart, audioPromises) {
     prefetchNextChapterData();
   }
 
-  const qIdx = idx - pageStart;
-  // Resolve from queue if available, otherwise generate on-the-fly (cache hit likely)
-  const audio = qIdx >= 0 && qIdx < audioPromises.length
-    ? await audioPromises[qIdx]
+  // Await the pre-queued promise — resolves immediately if cached, waits if still generating
+  const audio = (allPromises && idx < allPromises.length)
+    ? await allPromises[idx]
     : await genAudio(kokoroInstance, idx);
 
   if (!audio || !ttsActive) return;
-
-  // Beyond the pre-generated page: push a 1-ahead promise (will hit cache if prefetched)
-  if (qIdx >= audioPromises.length - 1) {
-    audioPromises.push(genAudio(kokoroInstance, idx + 1));
-  }
 
   const blob = new Blob([audio.toWav()], { type: "audio/wav" });
   const url = URL.createObjectURL(blob);
@@ -505,12 +494,12 @@ async function playKokoroVerse(idx, pageStart, audioPromises) {
   audioEl.onended = () => {
     URL.revokeObjectURL(url);
     currentAudioEl = null;
-    if (ttsActive) playKokoroVerse(idx + 1, pageStart, audioPromises);
+    if (ttsActive) playKokoroVerse(idx + 1, allPromises);
   };
   audioEl.onerror = () => {
     URL.revokeObjectURL(url);
     currentAudioEl = null;
-    if (ttsActive) playKokoroVerse(idx + 1, pageStart, audioPromises);
+    if (ttsActive) playKokoroVerse(idx + 1, allPromises);
   };
   audioEl.play().catch(err => {
     if (err.name !== "AbortError") console.error("Audio play error:", err);
@@ -519,14 +508,10 @@ async function playKokoroVerse(idx, pageStart, audioPromises) {
   });
 }
 
-// Entry point: pre-generate the current page, then start playing
+// Entry point: pre-generate ALL chapter verses, then start playing
 async function startKokoroTTS(startIdx) {
-  // Show feedback IMMEDIATELY — don't wait for model load to start the animation
-  prefetchToken = null;
-  startWhimsyTimer();
-  state.aiPreparing = true;
-  state.speaking = true;
-  render();
+  // (whimsy + aiPreparing already set synchronously in startTTS before this call)
+  prefetchToken = null; // cancel any background prefetch — we take over generation
 
   const tts = await loadKokoroModel();
   if (!tts || !ttsActive) {
@@ -539,20 +524,17 @@ async function startKokoroTTS(startIdx) {
     return;
   }
 
-  // Kick off inference for ALL verses on this page (cache hits resolve instantly)
-  const pageEnd = Math.min(startIdx + VERSES_PER_PAGE, state.verses.length);
-  const audioPromises = Array.from(
-    { length: pageEnd - startIdx },
-    (_, i) => genAudio(tts, startIdx + i)
-  );
+  // Queue ALL chapter verses upfront — WASM serializes them one by one automatically.
+  // This keeps the generation pipeline always running ahead of playback.
+  const allPromises = state.verses.map((_, i) => genAudio(tts, i));
 
-  // If verse 1 is already cached, short buffer (fast path); otherwise full buffer
+  // Short buffer if starting verse is cached; longer if it needs generating
   const firstKey = audioCacheKey(startIdx);
   const isCached = !!(await getCachedAudio(firstKey));
-  const bufferMs = isCached ? 800 : 2500;
+  const bufferMs = isCached ? 600 : 2000;
 
   await Promise.all([
-    audioPromises[0],
+    allPromises[startIdx],
     new Promise(r => setTimeout(r, bufferMs)),
   ]);
 
@@ -562,7 +544,7 @@ async function startKokoroTTS(startIdx) {
 
   if (!ttsActive) return;
 
-  playKokoroVerse(startIdx, startIdx, audioPromises);
+  playKokoroVerse(startIdx, allPromises);
 }
 
 function startTTS() {
@@ -571,6 +553,10 @@ function startTTS() {
   ttsActive = true;
   state.speaking = true;
   if (state.voiceMode === "ai") {
+    // Set preparing state SYNCHRONOUSLY here — guaranteed to render before any await
+    startWhimsyTimer();
+    state.aiPreparing = true;
+    render();
     startKokoroTTS(startIdx);
   } else {
     speakVerse(startIdx);
