@@ -74,15 +74,28 @@ const BOOKS = [
 // ── Verses per page for 600×600 display ──
 const VERSES_PER_PAGE = 4;
 
+// ── Available translations (all free / public domain via bible-api.com) ──
+const TRANSLATIONS = [
+  { id: "kjv",    name: "King James Version",                  year: "1611", note: "Classic KJV" },
+  { id: "web",    name: "World English Bible",                 year: "2000", note: "Modern public domain" },
+  { id: "bbe",    name: "Bible in Basic English",              year: "1949", note: "Simple vocabulary" },
+  { id: "asv",    name: "American Standard Version",           year: "1901", note: "Scholarly" },
+  { id: "darby",  name: "Darby Translation",                   year: "1890", note: "Literal" },
+  { id: "dra",    name: "Douay-Rheims",                        year: "1899", note: "Catholic" },
+  { id: "ylt",    name: "Young's Literal Translation",         year: "1898", note: "NT only" },
+  { id: "oeb-us", name: "Open English Bible (US)",             year: "2010", note: "Gender-inclusive" },
+  { id: "webbe",  name: "World English Bible (British)",       year: "2000", note: "UK spelling" },
+];
+
 // ── State ────────────────────────────────────────────────────
 const state = {
-  screen: "home",       // home | books | chapters | reading | search
+  screen: "home",       // home | books | chapters | reading | search | translations
   bookIdx: 0,
   chapterIdx: 0,        // 0-based
   verses: [],           // [{verse, text}]
   page: 0,
   totalPages: 0,
-  listIdx: 0,           // focused row in books/search
+  listIdx: 0,           // focused row in books/search/translations
   chapterFocus: 0,      // focused cell in chapter grid
   readingFocus: "prev", // "prev" | "speak" | "next" in reading controls
   speaking: false,
@@ -93,6 +106,8 @@ const state = {
   searchResults: [],
   searchIdx: 0,
   searchLoading: false,
+  translation: "kjv",   // active translation ID
+  translationIdx: 0,    // focused row in translations screen
 };
 
 // ── TTS ───────────────────────────────────────────────────────
@@ -158,7 +173,8 @@ function toggleTTS() {
 
 // ── API ───────────────────────────────────────────────────────
 async function fetchChapter(bookAbbr, chapter) {
-  const url = `https://bible-api.com/${bookAbbr}+${chapter}`;
+  const t = state.translation;
+  const url = `https://bible-api.com/${bookAbbr}+${chapter}?translation=${t}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
@@ -167,7 +183,8 @@ async function fetchChapter(bookAbbr, chapter) {
 
 async function fetchSearchVerses(query) {
   const encoded = encodeURIComponent(query.trim());
-  const url = `https://bible-api.com/${encoded}`;
+  const t = state.translation;
+  const url = `https://bible-api.com/${encoded}?translation=${t}`;
   const res = await fetch(url);
   if (!res.ok) return [];
   const data = await res.json();
@@ -248,14 +265,31 @@ document.addEventListener("keydown", (e) => {
 
   if (state.screen === "home") {
     if (key === "ArrowDown") {
-      state.listIdx = Math.min(state.listIdx + 1, 1);
+      state.listIdx = Math.min(state.listIdx + 1, 2);
       render();
     } else if (key === "ArrowUp") {
       state.listIdx = Math.max(state.listIdx - 1, 0);
       render();
     } else if (key === "Enter" || key === "ArrowRight") {
       if (state.listIdx === 0) { state.listIdx = 0; navigate("books"); }
-      else { navigate("search"); }
+      else if (state.listIdx === 1) { navigate("search"); }
+      else { state.translationIdx = TRANSLATIONS.findIndex(t => t.id === state.translation); navigate("translations"); }
+    }
+    return;
+  }
+
+  if (state.screen === "translations") {
+    if (key === "ArrowDown") {
+      state.translationIdx = Math.min(state.translationIdx + 1, TRANSLATIONS.length - 1);
+      render();
+    } else if (key === "ArrowUp") {
+      state.translationIdx = Math.max(state.translationIdx - 1, 0);
+      render();
+    } else if (key === "Enter" || key === "ArrowRight") {
+      state.translation = TRANSLATIONS[state.translationIdx].id;
+      navigate("home");
+    } else if (key === "Escape" || key === "ArrowLeft") {
+      navigate("home");
     }
     return;
   }
@@ -373,16 +407,18 @@ function el(tag, attrs = {}, ...children) {
 // ── Screens ────────────────────────────────────────────────────
 
 function renderHome() {
+  const activeTrans = TRANSLATIONS.find(t => t.id === state.translation) || TRANSLATIONS[0];
   const items = [
     { icon: "✦", label: "Read", hint: "Browse Books" },
     { icon: "⌕", label: "Search", hint: "Find a verse" },
+    { icon: "⇄", label: "Translation", hint: activeTrans.id.toUpperCase() },
   ];
 
   return el("div", { class: "screen active" },
     el("div", { class: "home-brand" },
       el("div", { class: "home-cross" }, "✝"),
       el("div", { class: "home-title" }, "Holy Bible"),
-      el("div", { class: "home-tagline" }, "King James Version"),
+      el("div", { class: "home-tagline" }, activeTrans.name),
       el("div", { class: "home-menu" },
         ...items.map((item, i) =>
           el("div", {
@@ -390,7 +426,8 @@ function renderHome() {
             onclick: () => {
               state.listIdx = i;
               if (i === 0) navigate("books");
-              else navigate("search");
+              else if (i === 1) navigate("search");
+              else { state.translationIdx = TRANSLATIONS.findIndex(t => t.id === state.translation); navigate("translations"); }
             }
           },
             el("span", { class: "home-item-icon" }, item.icon),
@@ -403,6 +440,42 @@ function renderHome() {
     keysHint([
       { keys: ["↑↓"], label: "navigate" },
       { keys: ["↵"], label: "select" },
+    ])
+  );
+}
+
+function renderTranslations() {
+  const ITEM_H = 50;
+  const VISIBLE = 7;
+  const offset = Math.max(0, Math.min(state.translationIdx - 3, TRANSLATIONS.length - VISIBLE));
+
+  const rows = TRANSLATIONS.map((t, i) =>
+    el("div", {
+      class: `list-item${state.translationIdx === i ? " focused" : ""}${t.id === state.translation ? " active-translation" : ""}`,
+      onclick: () => { state.translationIdx = i; state.translation = t.id; navigate("home"); }
+    },
+      el("span", { class: "list-item-num" }, t.id === state.translation ? "✓" : ""),
+      el("div", { class: "trans-info" },
+        el("span", { class: "list-item-name" }, t.name),
+        el("span", { class: "trans-meta" }, `${t.year} · ${t.note}`),
+      ),
+    )
+  );
+
+  const scroll = el("div", { class: "list-scroll" }, ...rows);
+  scroll.style.transform = `translateY(-${offset * ITEM_H}px)`;
+
+  return el("div", { class: "screen active" },
+    el("div", { class: "screen-header" },
+      el("div", { class: "back-btn", onclick: () => navigate("home") }, "‹"),
+      el("div", { class: "screen-title" }, "Bible Translation"),
+      el("div", { class: "screen-subtitle" }, "All free · Public domain"),
+    ),
+    el("div", { class: "list-container" }, scroll),
+    keysHint([
+      { keys: ["↑↓"], label: "scroll" },
+      { keys: ["↵"], label: "select" },
+      { keys: ["←"], label: "back" },
     ])
   );
 }
@@ -653,12 +726,13 @@ function render() {
 
   let screenEl;
   switch (state.screen) {
-    case "home":     screenEl = renderHome(); break;
-    case "books":    screenEl = renderBooks(); break;
-    case "chapters": screenEl = renderChapters(); break;
-    case "reading":  screenEl = renderReading(); break;
-    case "search":   screenEl = renderSearch(); break;
-    default:         screenEl = renderHome();
+    case "home":         screenEl = renderHome(); break;
+    case "books":        screenEl = renderBooks(); break;
+    case "chapters":     screenEl = renderChapters(); break;
+    case "reading":      screenEl = renderReading(); break;
+    case "search":       screenEl = renderSearch(); break;
+    case "translations": screenEl = renderTranslations(); break;
+    default:             screenEl = renderHome();
   }
 
   app.appendChild(screenEl);

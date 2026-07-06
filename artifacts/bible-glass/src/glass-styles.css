@@ -643,6 +643,29 @@ html, body {
   font-size: 13px;
 }
 
+/* ── Translation Screen ── */
+.trans-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.trans-meta {
+  font-size: 10px;
+  color: var(--white-25);
+  letter-spacing: 0.04em;
+}
+
+.list-item.active-translation .list-item-name {
+  color: var(--gold);
+}
+
+.list-item.active-translation .list-item-num {
+  color: var(--gold);
+  font-size: 13px;
+}
+
 /* ── TTS speaking indicator ── */
 .tts-bar {
   display: flex;
