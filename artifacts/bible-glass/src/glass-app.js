@@ -848,8 +848,7 @@ document.addEventListener("keydown", (e) => {
       state.translationIdx = Math.max(state.translationIdx - 1, 0);
       render();
     } else if (key === "Enter" || key === "ArrowRight") {
-      state.translation = TRANSLATIONS[state.translationIdx].id;
-      navigate("home");
+      applyTranslationChange(TRANSLATIONS[state.translationIdx].id);
     } else if (key === "Escape" || key === "ArrowLeft") {
       navigate("home");
     }
@@ -1056,6 +1055,23 @@ function currentVoiceIdx() {
   return ki >= 0 ? bvl.length + ki : bvl.length;
 }
 
+// Stop TTS, switch translation, re-fetch current chapter if one is loaded
+function applyTranslationChange(newId) {
+  if (state.translation === newId) { navigate("home"); return; }
+  stopTTS();
+  state.translation = newId;
+  navigate("home");
+  if (state.verses.length > 0) {
+    const book = BOOKS[state.bookIdx];
+    const chapterNum = state.chapterIdx + 1;
+    fetchChapter(book.abbr, chapterNum).then(verses => {
+      state.verses = verses;
+      state.totalPages = Math.ceil(verses.length / VERSES_PER_PAGE);
+      if (state.screen === "reading") render();
+    }).catch(() => {});
+  }
+}
+
 // ── Screens ────────────────────────────────────────────────────
 
 function renderHome() {
@@ -1115,7 +1131,7 @@ function renderTranslations() {
   const rows = TRANSLATIONS.map((t, i) =>
     el("div", {
       class: `list-item${state.translationIdx === i ? " focused" : ""}${t.id === state.translation ? " active-translation" : ""}`,
-      onclick: () => { state.translationIdx = i; state.translation = t.id; navigate("home"); }
+      onclick: () => { state.translationIdx = i; applyTranslationChange(t.id); }
     },
       el("span", { class: "list-item-num" }, t.id === state.translation ? "✓" : ""),
       el("div", { class: "trans-info" },
