@@ -108,16 +108,54 @@ const state = {
   searchLoading: false,
   translation: "kjv",   // active translation ID
   translationIdx: 0,    // focused row in translations screen
+  voiceMode: "standard",   // "standard" | "ai"
+  voiceIdx: 0,             // focused row in voice screen
+  aiTtsStatus: "idle",     // "idle" | "loading" | "ready" | "error"
+  aiTtsProgress: 0,        // 0–100 download progress
+  aiVoiceId: "af_heart",   // Kokoro voice id
 };
 
 // ── TTS ───────────────────────────────────────────────────────
 let speechSynth = window.speechSynthesis;
 let currentUtterance = null;
+let currentAudioEl = null;
 let ttsQueue = [];
 let ttsActive = false;
+let kokoroInstance = null;
+
+// Load voices list asynchronously (Chrome/Edge need voiceschanged event)
+let cachedVoices = [];
+function loadVoices() {
+  const v = window.speechSynthesis.getVoices();
+  if (v.length) cachedVoices = v;
+}
+loadVoices();
+window.speechSynthesis.addEventListener("voiceschanged", loadVoices);
+
+function getBestSystemVoice() {
+  const voices = cachedVoices.length ? cachedVoices : window.speechSynthesis.getVoices();
+  const priority = [
+    "Microsoft Aria Online (Natural) - English (United States)",
+    "Microsoft Jenny Online (Natural) - English (United States)",
+    "Microsoft Guy Online (Natural) - English (United States)",
+    "Google US English",
+    "Google UK English Female",
+    "Samantha",
+  ];
+  for (const name of priority) {
+    const v = voices.find(v => v.name === name);
+    if (v) return v;
+  }
+  return voices.find(v => v.lang && v.lang.startsWith("en")) || voices[0] || null;
+}
 
 function stopTTS() {
   speechSynth.cancel();
+  if (currentAudioEl) {
+    currentAudioEl.pause();
+    currentAudioEl.src = "";
+    currentAudioEl = null;
+  }
   ttsActive = false;
   ttsQueue = [];
   state.speaking = false;
@@ -126,32 +164,97 @@ function stopTTS() {
   render();
 }
 
+// ── Standard (browser) TTS ────────────────────────────────────
 function speakVerse(idx) {
-  if (idx >= state.verses.length) {
-    stopTTS();
-    return;
-  }
+  if (idx >= state.verses.length) { stopTTS(); return; }
   const verse = state.verses[idx];
   state.speakingVerseIdx = idx;
   state.speaking = true;
   render();
 
   const utter = new SpeechSynthesisUtterance(verse.text);
-  utter.rate = 0.92;
+  utter.rate = 0.90;
   utter.pitch = 1.0;
   utter.lang = "en-US";
+  const bestVoice = getBestSystemVoice();
+  if (bestVoice) utter.voice = bestVoice;
   currentUtterance = utter;
 
-  utter.onend = () => {
-    if (ttsActive) {
-      speakVerse(idx + 1);
-    }
-  };
-  utter.onerror = () => {
-    if (ttsActive) speakVerse(idx + 1);
-  };
-
+  utter.onend = () => { if (ttsActive) speakVerse(idx + 1); };
+  utter.onerror = () => { if (ttsActive) speakVerse(idx + 1); };
   speechSynth.speak(utter);
+}
+
+// ── AI (Kokoro) TTS ───────────────────────────────────────────
+async function loadKokoroModel() {
+  if (kokoroInstance) return kokoroInstance;
+  state.aiTtsStatus = "loading";
+  state.aiTtsProgress = 0;
+  render();
+  try {
+    const { KokoroTTS } = await import("kokoro-js");
+    kokoroInstance = await KokoroTTS.from_pretrained(
+      "onnx-community/Kokoro-82M-v1.0-ONNX",
+      {
+        dtype: "q8",
+        device: "wasm",
+        progress_callback: (info) => {
+          if (info.status === "progress" && info.total > 0) {
+            state.aiTtsProgress = Math.round((info.loaded / info.total) * 100);
+            render();
+          }
+        },
+      }
+    );
+    state.aiTtsStatus = "ready";
+    state.aiTtsProgress = 100;
+    render();
+    return kokoroInstance;
+  } catch (err) {
+    console.error("Kokoro load failed:", err);
+    state.aiTtsStatus = "error";
+    state.voiceMode = "standard";
+    render();
+    return null;
+  }
+}
+
+async function speakVerseWithKokoro(idx) {
+  if (idx >= state.verses.length) { stopTTS(); return; }
+  const verse = state.verses[idx];
+  state.speakingVerseIdx = idx;
+  state.speaking = true;
+  render();
+
+  const tts = await loadKokoroModel();
+  if (!tts || !ttsActive) return;
+
+  try {
+    const audio = await tts.generate(verse.text.trim(), {
+      voice: state.aiVoiceId,
+      speed: 0.88,
+    });
+    if (!ttsActive) return;
+
+    const blob = new Blob([audio.toWav()], { type: "audio/wav" });
+    const url = URL.createObjectURL(blob);
+    const audioEl = new Audio(url);
+    currentAudioEl = audioEl;
+    audioEl.onended = () => {
+      URL.revokeObjectURL(url);
+      currentAudioEl = null;
+      if (ttsActive) speakVerseWithKokoro(idx + 1);
+    };
+    audioEl.onerror = () => {
+      URL.revokeObjectURL(url);
+      currentAudioEl = null;
+      if (ttsActive) speakVerseWithKokoro(idx + 1);
+    };
+    audioEl.play();
+  } catch (err) {
+    console.error("Kokoro generate failed:", err);
+    if (ttsActive) speakVerseWithKokoro(idx + 1);
+  }
 }
 
 function startTTS() {
@@ -159,7 +262,11 @@ function startTTS() {
   const startIdx = state.page * VERSES_PER_PAGE;
   ttsActive = true;
   state.speaking = true;
-  speakVerse(startIdx);
+  if (state.voiceMode === "ai") {
+    speakVerseWithKokoro(startIdx);
+  } else {
+    speakVerse(startIdx);
+  }
 }
 
 function toggleTTS() {
@@ -265,7 +372,7 @@ document.addEventListener("keydown", (e) => {
 
   if (state.screen === "home") {
     if (key === "ArrowDown") {
-      state.listIdx = Math.min(state.listIdx + 1, 2);
+      state.listIdx = Math.min(state.listIdx + 1, 3);
       render();
     } else if (key === "ArrowUp") {
       state.listIdx = Math.max(state.listIdx - 1, 0);
@@ -273,7 +380,29 @@ document.addEventListener("keydown", (e) => {
     } else if (key === "Enter" || key === "ArrowRight") {
       if (state.listIdx === 0) { state.listIdx = 0; navigate("books"); }
       else if (state.listIdx === 1) { navigate("search"); }
-      else { state.translationIdx = TRANSLATIONS.findIndex(t => t.id === state.translation); navigate("translations"); }
+      else if (state.listIdx === 2) { state.translationIdx = TRANSLATIONS.findIndex(t => t.id === state.translation); navigate("translations"); }
+      else { state.voiceIdx = state.voiceMode === "ai" ? 1 : 0; navigate("voice"); }
+    }
+    return;
+  }
+
+  if (state.screen === "voice") {
+    if (key === "ArrowDown") {
+      state.voiceIdx = Math.min(state.voiceIdx + 1, 1);
+      render();
+    } else if (key === "ArrowUp") {
+      state.voiceIdx = Math.max(state.voiceIdx - 1, 0);
+      render();
+    } else if (key === "Enter" || key === "ArrowRight") {
+      if (state.voiceIdx === 0) {
+        state.voiceMode = "standard";
+      } else {
+        state.voiceMode = "ai";
+        if (state.aiTtsStatus === "idle") loadKokoroModel();
+      }
+      navigate("home");
+    } else if (key === "Escape" || key === "ArrowLeft") {
+      navigate("home");
     }
     return;
   }
@@ -399,7 +528,10 @@ document.addEventListener("wheel", (e) => {
   const dir = e.deltaY > 0 ? 1 : -1;
 
   if (state.screen === "home") {
-    state.listIdx = Math.max(0, Math.min(state.listIdx + dir, 2));
+    state.listIdx = Math.max(0, Math.min(state.listIdx + dir, 3));
+    render();
+  } else if (state.screen === "voice") {
+    state.voiceIdx = Math.max(0, Math.min(state.voiceIdx + dir, 1));
     render();
   } else if (state.screen === "books") {
     state.listIdx = Math.max(0, Math.min(state.listIdx + dir, BOOKS.length - 1));
@@ -439,10 +571,14 @@ function el(tag, attrs = {}, ...children) {
 
 function renderHome() {
   const activeTrans = TRANSLATIONS.find(t => t.id === state.translation) || TRANSLATIONS[0];
+  const voiceHint = state.voiceMode === "ai"
+    ? (state.aiTtsStatus === "loading" ? `${state.aiTtsProgress}%` : "AI ✦")
+    : "Standard";
   const items = [
-    { icon: "✦", label: "Read", hint: "Browse Books" },
-    { icon: "⌕", label: "Search", hint: "Find a verse" },
+    { icon: "✦", label: "Read",        hint: "Browse Books" },
+    { icon: "⌕", label: "Search",      hint: "Find a verse" },
     { icon: "⇄", label: "Translation", hint: activeTrans.id.toUpperCase() },
+    { icon: "♪", label: "Voice",       hint: voiceHint },
   ];
 
   return el("div", { class: "screen active" },
@@ -458,7 +594,8 @@ function renderHome() {
               state.listIdx = i;
               if (i === 0) navigate("books");
               else if (i === 1) navigate("search");
-              else { state.translationIdx = TRANSLATIONS.findIndex(t => t.id === state.translation); navigate("translations"); }
+              else if (i === 2) { state.translationIdx = TRANSLATIONS.findIndex(t => t.id === state.translation); navigate("translations"); }
+              else { state.voiceIdx = state.voiceMode === "ai" ? 1 : 0; navigate("voice"); }
             }
           },
             el("span", { class: "home-item-icon" }, item.icon),
@@ -503,6 +640,76 @@ function renderTranslations() {
       el("div", { class: "screen-subtitle" }, "All free · Public domain"),
     ),
     el("div", { class: "list-container" }, scroll),
+    keysHint([
+      { keys: ["↑↓"], label: "scroll" },
+      { keys: ["↵"], label: "select" },
+      { keys: ["←"], label: "back" },
+    ])
+  );
+}
+
+function renderVoice() {
+  const aiStatusText = {
+    idle:    "~86 MB · downloads once",
+    loading: `Downloading… ${state.aiTtsProgress}%`,
+    ready:   "Ready · cached",
+    error:   "Failed to load — try again",
+  }[state.aiTtsStatus];
+
+  const options = [
+    {
+      label: "Standard Voice",
+      sub: "Browser built-in · instant",
+      active: state.voiceMode === "standard",
+      idx: 0,
+    },
+    {
+      label: "AI Voice · Kokoro",
+      sub: aiStatusText,
+      active: state.voiceMode === "ai",
+      idx: 1,
+      loading: state.aiTtsStatus === "loading",
+      progress: state.aiTtsProgress,
+    },
+  ];
+
+  return el("div", { class: "screen active" },
+    el("div", { class: "screen-header" },
+      el("div", { class: "back-btn", onclick: () => navigate("home") }, "‹"),
+      el("div", { class: "screen-title" }, "Voice Engine"),
+      el("div", { class: "screen-subtitle" }, "Free · On-device"),
+    ),
+    el("div", { class: "voice-list" },
+      ...options.map(opt =>
+        el("div", {
+          class: `voice-option${state.voiceIdx === opt.idx ? " focused" : ""}${opt.active ? " active-voice" : ""}`,
+          onclick: () => {
+            state.voiceIdx = opt.idx;
+            if (opt.idx === 0) {
+              state.voiceMode = "standard";
+            } else {
+              state.voiceMode = "ai";
+              if (state.aiTtsStatus === "idle") loadKokoroModel();
+            }
+            navigate("home");
+          }
+        },
+          el("div", { class: "voice-check" }, opt.active ? "✓" : ""),
+          el("div", { class: "voice-info" },
+            el("div", { class: "voice-name" }, opt.label),
+            el("div", { class: "voice-sub" }, opt.sub),
+            opt.loading
+              ? el("div", { class: "voice-progress-bar" },
+                  el("div", { class: "voice-progress-fill", style: `width:${opt.progress}%` })
+                )
+              : null,
+          ),
+        )
+      )
+    ),
+    el("div", { class: "voice-note" },
+      "AI Voice downloads once (~86 MB) and runs entirely on your device."
+    ),
     keysHint([
       { keys: ["↑↓"], label: "scroll" },
       { keys: ["↵"], label: "select" },
@@ -590,9 +797,10 @@ function renderReading() {
     );
   });
 
-  // TTS button icon/label
-  const ttsIcon = state.speaking ? "◼" : "♪";
-  const ttsLabel = state.speaking ? "Stop" : "Listen";
+  // TTS button icon/label — show AI loading state if applicable
+  const aiLoading = state.voiceMode === "ai" && state.aiTtsStatus === "loading";
+  const ttsIcon = state.speaking ? "◼" : (aiLoading ? "⏳" : "♪");
+  const ttsLabel = state.speaking ? "Stop" : (aiLoading ? `${state.aiTtsProgress}%` : "Listen");
 
   // Pagination dots
   const dots = state.totalPages > 1
@@ -763,6 +971,7 @@ function render() {
     case "reading":      screenEl = renderReading(); break;
     case "search":       screenEl = renderSearch(); break;
     case "translations": screenEl = renderTranslations(); break;
+    case "voice":        screenEl = renderVoice(); break;
     default:             screenEl = renderHome();
   }
 

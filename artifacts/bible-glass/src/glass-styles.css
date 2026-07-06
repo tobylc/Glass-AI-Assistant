@@ -643,6 +643,91 @@ html, body {
   font-size: 13px;
 }
 
+/* ── Voice Screen ── */
+.voice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.voice-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.voice-option.focused,
+.voice-option:hover {
+  background: var(--surface-focus);
+  border-color: var(--gold-dim);
+}
+
+.voice-option.active-voice {
+  border-color: var(--gold-dim);
+}
+
+.voice-option.active-voice .voice-name {
+  color: var(--gold);
+}
+
+.voice-check {
+  font-size: 14px;
+  color: var(--gold);
+  width: 18px;
+  flex-shrink: 0;
+  padding-top: 1px;
+}
+
+.voice-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.voice-name {
+  font-size: 15px;
+  color: var(--white-80);
+  font-weight: 400;
+}
+
+.voice-sub {
+  font-size: 11px;
+  color: var(--white-25);
+  letter-spacing: 0.04em;
+}
+
+.voice-progress-bar {
+  height: 3px;
+  background: var(--white-10);
+  border-radius: 2px;
+  margin-top: 4px;
+  overflow: hidden;
+}
+
+.voice-progress-fill {
+  height: 100%;
+  background: var(--gold);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.voice-note {
+  font-size: 11px;
+  color: var(--white-25);
+  text-align: center;
+  line-height: 1.5;
+  padding: 0 10px;
+  margin-bottom: 32px;
+}
+
 /* ── Translation Screen ── */
 .trans-info {
   display: flex;
