@@ -87,6 +87,22 @@ const TRANSLATIONS = [
   { id: "webbe",  name: "World English Bible (British)",       year: "2000", note: "UK spelling" },
 ];
 
+// ── Kokoro voices ─────────────────────────────────────────────
+const KOKORO_VOICES = [
+  { id: "af_heart",   name: "Heart",    accent: "American", gender: "Female", note: "Warm · default" },
+  { id: "af_bella",   name: "Bella",    accent: "American", gender: "Female", note: "Smooth" },
+  { id: "af_sarah",   name: "Sarah",    accent: "American", gender: "Female", note: "Clear" },
+  { id: "af_nicole",  name: "Nicole",   accent: "American", gender: "Female", note: "Soft" },
+  { id: "am_adam",    name: "Adam",     accent: "American", gender: "Male",   note: "Calm" },
+  { id: "am_michael", name: "Michael",  accent: "American", gender: "Male",   note: "Deep" },
+  { id: "bf_emma",    name: "Emma",     accent: "British",  gender: "Female", note: "Refined" },
+  { id: "bf_isabella",name: "Isabella", accent: "British",  gender: "Female", note: "Elegant" },
+  { id: "bm_george",  name: "George",   accent: "British",  gender: "Male",   note: "Rich" },
+  { id: "bm_lewis",   name: "Lewis",    accent: "British",  gender: "Male",   note: "Crisp" },
+];
+// Flat index helpers: voice list idx 0 = Standard, idx 1-10 = KOKORO_VOICES[0-9]
+const VOICE_COUNT = 1 + KOKORO_VOICES.length; // 11
+
 // ── State ────────────────────────────────────────────────────
 const state = {
   screen: "home",       // home | books | chapters | reading | search | translations
@@ -436,26 +452,20 @@ document.addEventListener("keydown", (e) => {
       if (state.listIdx === 0) { state.listIdx = 0; navigate("books"); }
       else if (state.listIdx === 1) { navigate("search"); }
       else if (state.listIdx === 2) { state.translationIdx = TRANSLATIONS.findIndex(t => t.id === state.translation); navigate("translations"); }
-      else { state.voiceIdx = state.voiceMode === "ai" ? 1 : 0; navigate("voice"); }
+      else { state.voiceIdx = currentVoiceIdx(); navigate("voice"); }
     }
     return;
   }
 
   if (state.screen === "voice") {
     if (key === "ArrowDown") {
-      state.voiceIdx = Math.min(state.voiceIdx + 1, 1);
+      state.voiceIdx = Math.min(state.voiceIdx + 1, VOICE_COUNT - 1);
       render();
     } else if (key === "ArrowUp") {
       state.voiceIdx = Math.max(state.voiceIdx - 1, 0);
       render();
     } else if (key === "Enter" || key === "ArrowRight") {
-      if (state.voiceIdx === 0) {
-        state.voiceMode = "standard";
-      } else {
-        state.voiceMode = "ai";
-        if (state.aiTtsStatus === "idle") loadKokoroModel();
-      }
-      navigate("home");
+      selectVoiceIdx(state.voiceIdx);
     } else if (key === "Escape" || key === "ArrowLeft") {
       navigate("home");
     }
@@ -586,7 +596,7 @@ document.addEventListener("wheel", (e) => {
     state.listIdx = Math.max(0, Math.min(state.listIdx + dir, 3));
     render();
   } else if (state.screen === "voice") {
-    state.voiceIdx = Math.max(0, Math.min(state.voiceIdx + dir, 1));
+    state.voiceIdx = Math.max(0, Math.min(state.voiceIdx + dir, VOICE_COUNT - 1));
     render();
   } else if (state.screen === "books") {
     state.listIdx = Math.max(0, Math.min(state.listIdx + dir, BOOKS.length - 1));
@@ -622,12 +632,34 @@ function el(tag, attrs = {}, ...children) {
   return elem;
 }
 
+// ── Voice selection helper ────────────────────────────────────
+function selectVoiceIdx(idx) {
+  if (idx === 0) {
+    state.voiceMode = "standard";
+  } else {
+    const kv = KOKORO_VOICES[idx - 1];
+    if (kv) {
+      state.voiceMode = "ai";
+      state.aiVoiceId = kv.id;
+      if (state.aiTtsStatus === "idle") loadKokoroModel();
+    }
+  }
+  navigate("home");
+}
+
+function currentVoiceIdx() {
+  if (state.voiceMode === "standard") return 0;
+  const ki = KOKORO_VOICES.findIndex(v => v.id === state.aiVoiceId);
+  return ki >= 0 ? ki + 1 : 1;
+}
+
 // ── Screens ────────────────────────────────────────────────────
 
 function renderHome() {
   const activeTrans = TRANSLATIONS.find(t => t.id === state.translation) || TRANSLATIONS[0];
+  const activeKV = KOKORO_VOICES.find(v => v.id === state.aiVoiceId);
   const voiceHint = state.voiceMode === "ai"
-    ? (state.aiTtsStatus === "loading" ? `${state.aiTtsProgress}%` : "AI ✦")
+    ? (state.aiTtsStatus === "loading" ? `${state.aiTtsProgress}%` : (activeKV ? activeKV.name : "AI ✦"))
     : "Standard";
   const items = [
     { icon: "✦", label: "Read",        hint: "Browse Books" },
@@ -650,7 +682,7 @@ function renderHome() {
               if (i === 0) navigate("books");
               else if (i === 1) navigate("search");
               else if (i === 2) { state.translationIdx = TRANSLATIONS.findIndex(t => t.id === state.translation); navigate("translations"); }
-              else { state.voiceIdx = state.voiceMode === "ai" ? 1 : 0; navigate("voice"); }
+              else { state.voiceIdx = currentVoiceIdx(); navigate("voice"); }
             }
           },
             el("span", { class: "home-item-icon" }, item.icon),
@@ -704,66 +736,74 @@ function renderTranslations() {
 }
 
 function renderVoice() {
-  const aiStatusText = {
-    idle:    "~86 MB · downloads once",
-    loading: `Downloading… ${state.aiTtsProgress}%`,
-    ready:   "Ready · cached",
-    error:   "Failed to load — try again",
-  }[state.aiTtsStatus];
+  const VISIBLE = 7;
+  const activeIdx = currentVoiceIdx();
 
-  const options = [
-    {
-      label: "Standard Voice",
-      sub: "Browser built-in · instant",
-      active: state.voiceMode === "standard",
-      idx: 0,
-    },
-    {
-      label: "AI Voice · Kokoro",
-      sub: aiStatusText,
-      active: state.voiceMode === "ai",
-      idx: 1,
-      loading: state.aiTtsStatus === "loading",
+  // Build flat list: [Standard, ...KOKORO_VOICES]
+  const aiStatus = state.aiTtsStatus;
+  const aiSub = {
+    idle:    "~86 MB · one-time download",
+    loading: `Downloading… ${state.aiTtsProgress}%`,
+    ready:   "Downloaded · on-device",
+    error:   "Failed · tap to retry",
+  }[aiStatus];
+
+  const allItems = [
+    { idx: 0,  label: "Standard",  sub: "Browser built-in · instant", badge: null },
+    ...KOKORO_VOICES.map((v, i) => ({
+      idx: i + 1,
+      label: v.name,
+      sub: `${v.accent} ${v.gender} · ${v.note}`,
+      badge: i === 0 ? aiSub : null,   // only show status on first AI entry
+      loading: i === 0 && aiStatus === "loading",
       progress: state.aiTtsProgress,
-    },
+    })),
   ];
+
+  // Sliding window: keep focused item near center
+  const offset = Math.max(0, Math.min(state.voiceIdx - Math.floor(VISIBLE / 2), VOICE_COUNT - VISIBLE));
+  const visible = allItems.slice(offset, offset + VISIBLE);
+
+  // Section divider: show "── AI Voices ──" between Standard and first Kokoro entry
+  const showDivider = offset === 0; // only when Standard is visible
 
   return el("div", { class: "screen active" },
     el("div", { class: "screen-header" },
       el("div", { class: "back-btn", onclick: () => navigate("home") }, "‹"),
-      el("div", { class: "screen-title" }, "Voice Engine"),
+      el("div", { class: "screen-title" }, "Voice"),
       el("div", { class: "screen-subtitle" }, "Free · On-device"),
     ),
     el("div", { class: "voice-list" },
-      ...options.map(opt =>
-        el("div", {
-          class: `voice-option${state.voiceIdx === opt.idx ? " focused" : ""}${opt.active ? " active-voice" : ""}`,
-          onclick: () => {
-            state.voiceIdx = opt.idx;
-            if (opt.idx === 0) {
-              state.voiceMode = "standard";
-            } else {
-              state.voiceMode = "ai";
-              if (state.aiTtsStatus === "idle") loadKokoroModel();
-            }
-            navigate("home");
-          }
-        },
-          el("div", { class: "voice-check" }, opt.active ? "✓" : ""),
-          el("div", { class: "voice-info" },
-            el("div", { class: "voice-name" }, opt.label),
-            el("div", { class: "voice-sub" }, opt.sub),
-            opt.loading
-              ? el("div", { class: "voice-progress-bar" },
-                  el("div", { class: "voice-progress-fill", style: `width:${opt.progress}%` })
-                )
-              : null,
-          ),
-        )
-      )
-    ),
-    el("div", { class: "voice-note" },
-      "AI Voice downloads once (~86 MB) and runs entirely on your device."
+      ...visible.map((item, visI) => {
+        const isActive = item.idx === activeIdx;
+        const isFocused = item.idx === state.voiceIdx;
+        const isStandard = item.idx === 0;
+        const isFirstKokoro = item.idx === 1;
+        return el("div", { class: "voice-group" },
+          // Divider between Standard and AI voices
+          showDivider && isFirstKokoro
+            ? el("div", { class: "voice-divider" }, "AI Voices · Kokoro")
+            : null,
+          el("div", {
+            class: `voice-option${isFocused ? " focused" : ""}${isActive ? " active-voice" : ""}`,
+            onclick: () => { state.voiceIdx = item.idx; selectVoiceIdx(item.idx); }
+          },
+            el("div", { class: "voice-check" }, isActive ? "✓" : ""),
+            el("div", { class: "voice-info" },
+              el("div", { class: "voice-name" }, item.label),
+              el("div", { class: "voice-sub" }, item.sub),
+              item.badge
+                ? el("div", { class: "voice-badge" }, item.badge)
+                : null,
+              item.loading
+                ? el("div", { class: "voice-progress-bar" },
+                    el("div", { class: "voice-progress-fill", style: `width:${item.progress}%` })
+                  )
+                : null,
+            ),
+          )
+        );
+      })
     ),
     keysHint([
       { keys: ["↑↓"], label: "scroll" },
