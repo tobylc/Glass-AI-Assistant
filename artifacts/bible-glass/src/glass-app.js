@@ -388,6 +388,37 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+// ── Mouse wheel scroll (browser preview) ─────────────────────
+let wheelCooldown = false;
+document.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  if (wheelCooldown) return;
+  wheelCooldown = true;
+  setTimeout(() => { wheelCooldown = false; }, 120);
+
+  const dir = e.deltaY > 0 ? 1 : -1;
+
+  if (state.screen === "home") {
+    state.listIdx = Math.max(0, Math.min(state.listIdx + dir, 2));
+    render();
+  } else if (state.screen === "books") {
+    state.listIdx = Math.max(0, Math.min(state.listIdx + dir, BOOKS.length - 1));
+    render();
+  } else if (state.screen === "translations") {
+    state.translationIdx = Math.max(0, Math.min(state.translationIdx + dir, TRANSLATIONS.length - 1));
+    render();
+  } else if (state.screen === "chapters") {
+    const book = BOOKS[state.listIdx];
+    state.chapterFocus = Math.max(0, Math.min(state.chapterFocus + dir, book.chapters - 1));
+    render();
+  } else if (state.screen === "search") {
+    state.searchIdx = Math.max(0, Math.min(state.searchIdx + dir, state.searchResults.length - 1));
+    render();
+  } else if (state.screen === "reading") {
+    if (dir > 0) nextPage(); else prevPage();
+  }
+}, { passive: false });
+
 // ── Render helpers ─────────────────────────────────────────────
 function el(tag, attrs = {}, ...children) {
   const elem = document.createElement(tag);
