@@ -161,9 +161,9 @@ const KOKORO_VOICES = [
   { id: "pm_alex",       name: "Alex",     gender: "Male",   note: "Calm",    lang: "pt" },
 ];
 
-// Dynamic voice count based on language filter
+// Only English Kokoro voices — non-English voices mispronounce Bible text
 function filteredKokoroVoices() {
-  return KOKORO_VOICES.filter(v => v.lang === state.kokoroLang);
+  return KOKORO_VOICES.filter(v => v.lang === "en-us" || v.lang === "en-gb");
 }
 function voiceCount() {
   return getBrowserVoiceList().length + filteredKokoroVoices().length;
@@ -262,10 +262,18 @@ function formatBrowserVoiceName(sv) {
 }
 
 // Returns the list shown in the Instant · Browser section:
-// always [Default (auto), ...device English voices]
+// Default (auto) + the single best female + single best male the device has
 function getBrowserVoiceList() {
-  const label = state.browserVoices.length ? "Default (auto)" : "Default";
-  return [{ name: label, uri: null, lang: "" }, ...state.browserVoices];
+  const voices = state.browserVoices;
+  // Ranked by quality — first match in each list wins
+  const femalePriority = ["Samantha", "Karen", "Moira", "Victoria", "Fiona", "Aria", "Jenny", "Google UK English Female", "Google US English"];
+  const malePriority   = ["Alex", "Daniel", "Tom", "Fred", "Guy", "George", "Google UK English Male", "Marcus", "Oliver"];
+  const pick = (list) => list.map(n => voices.find(v => v.name.includes(n))).find(Boolean) ?? null;
+  const bestFemale = pick(femalePriority);
+  const bestMale   = pick(malePriority);
+  const curated = [bestFemale, bestMale].filter(Boolean);
+  const label = curated.length ? "Default (auto)" : "Default";
+  return [{ name: label, uri: null, lang: "" }, ...curated];
 }
 
 function getBestSystemVoice() {
@@ -779,63 +787,24 @@ document.addEventListener("keydown", (e) => {
       if (state.listIdx === 0) { state.listIdx = 0; navigate("books"); }
       else if (state.listIdx === 1) { navigate("search"); }
       else if (state.listIdx === 2) { state.translationIdx = TRANSLATIONS.findIndex(t => t.id === state.translation); navigate("translations"); }
-      else if (state.listIdx === 3) { state.voiceIdx = currentVoiceIdx(); state.kokoroLang = (state.voiceMode === "ai" ? (KOKORO_VOICES.find(v => v.id === state.aiVoiceId)?.lang ?? "en-us") : "en-us"); navigate("voice"); }
+      else if (state.listIdx === 3) { resetToEnglishVoice(); state.voiceIdx = currentVoiceIdx(); navigate("voice"); }
       else { navigate("display"); }
     }
     return;
   }
 
   if (state.screen === "voice") {
-    const bvl = getBrowserVoiceList();
-    const fkv = filteredKokoroVoices();
-    const lastBrowserIdx = bvl.length - 1;
-    const firstKokoroIdx = bvl.length;
-    const maxIdx = bvl.length + fkv.length - 1;
-    if (state.voiceLangFocused) {
-      // Language picker row — ←→ cycle language, ↑↓ exit
-      if (key === "ArrowLeft") {
-        const li = KOKORO_LANGUAGES.findIndex(l => l.id === state.kokoroLang);
-        state.kokoroLang = KOKORO_LANGUAGES[(li - 1 + KOKORO_LANGUAGES.length) % KOKORO_LANGUAGES.length].id;
-        state.voiceIdx = firstKokoroIdx;
-        render();
-      } else if (key === "ArrowRight") {
-        const li = KOKORO_LANGUAGES.findIndex(l => l.id === state.kokoroLang);
-        state.kokoroLang = KOKORO_LANGUAGES[(li + 1) % KOKORO_LANGUAGES.length].id;
-        state.voiceIdx = firstKokoroIdx;
-        render();
-      } else if (key === "ArrowUp") {
-        state.voiceLangFocused = false;
-        state.voiceIdx = lastBrowserIdx;
-        render();
-      } else if (key === "ArrowDown") {
-        state.voiceLangFocused = false;
-        state.voiceIdx = firstKokoroIdx;
-        render();
-      } else if (key === "Escape") {
-        navigate("home");
-      }
-    } else {
-      if (key === "ArrowDown") {
-        if (state.voiceIdx === lastBrowserIdx) {
-          state.voiceLangFocused = true;
-          render();
-        } else {
-          state.voiceIdx = Math.min(state.voiceIdx + 1, maxIdx);
-          render();
-        }
-      } else if (key === "ArrowUp") {
-        if (state.voiceIdx === firstKokoroIdx) {
-          state.voiceLangFocused = true;
-          render();
-        } else {
-          state.voiceIdx = Math.max(state.voiceIdx - 1, 0);
-          render();
-        }
-      } else if (key === "Enter" || key === "ArrowRight") {
-        selectVoiceIdx(state.voiceIdx);
-      } else if (key === "Escape" || key === "ArrowLeft") {
-        navigate("home");
-      }
+    const maxIdx = voiceCount() - 1;
+    if (key === "ArrowDown") {
+      state.voiceIdx = Math.min(state.voiceIdx + 1, maxIdx);
+      render();
+    } else if (key === "ArrowUp") {
+      state.voiceIdx = Math.max(state.voiceIdx - 1, 0);
+      render();
+    } else if (key === "Enter" || key === "ArrowRight") {
+      selectVoiceIdx(state.voiceIdx);
+    } else if (key === "Escape" || key === "ArrowLeft") {
+      navigate("home");
     }
     return;
   }
@@ -1055,6 +1024,16 @@ function currentVoiceIdx() {
   return ki >= 0 ? bvl.length + ki : bvl.length;
 }
 
+// If current Kokoro voice is non-English, silently reset to Grace (af_heart)
+function resetToEnglishVoice() {
+  if (state.voiceMode === "ai") {
+    const v = KOKORO_VOICES.find(v => v.id === state.aiVoiceId);
+    if (v && v.lang !== "en-us" && v.lang !== "en-gb") {
+      state.aiVoiceId = "af_heart";
+    }
+  }
+}
+
 // Stop TTS, switch translation, re-fetch current chapter if one is loaded
 function applyTranslationChange(newId) {
   if (state.translation === newId) { navigate("home"); return; }
@@ -1105,7 +1084,7 @@ function renderHome() {
               if (i === 0) navigate("books");
               else if (i === 1) navigate("search");
               else if (i === 2) { state.translationIdx = TRANSLATIONS.findIndex(t => t.id === state.translation); navigate("translations"); }
-              else if (i === 3) { state.voiceIdx = currentVoiceIdx(); state.kokoroLang = (state.voiceMode === "ai" ? (KOKORO_VOICES.find(v => v.id === state.aiVoiceId)?.lang ?? "en-us") : "en-us"); navigate("voice"); }
+              else if (i === 3) { resetToEnglishVoice(); state.voiceIdx = currentVoiceIdx(); navigate("voice"); }
               else { navigate("display"); }
             }
           },
@@ -1162,7 +1141,7 @@ function renderTranslations() {
 function renderVoice() {
   const VOICE_ITEM_H = 66; // px per row (min-height 62 + 4 gap)
   const VISIBLE_BROWSER = 3;
-  const VISIBLE_KOKORO  = 3;
+  const VISIBLE_KOKORO  = 4;
   const bvl = getBrowserVoiceList();
   const fkv = filteredKokoroVoices();
   const activeIdx = currentVoiceIdx();
@@ -1176,17 +1155,14 @@ function renderVoice() {
   }[aiStatus];
 
   // ── Browser voices ─────────────────────────────────────────
-  const browserFocused = state.voiceIdx; // 0-based in bvl
-  const bOffset = state.voiceLangFocused
-    ? Math.max(0, bvl.length - VISIBLE_BROWSER)
-    : Math.max(0, Math.min(browserFocused - 1, bvl.length - VISIBLE_BROWSER));
-
+  const bFocused = state.voiceIdx;
+  const bOffset = Math.max(0, Math.min(bFocused - 1, bvl.length - VISIBLE_BROWSER));
   const browserRows = bvl.map((bv, i) => {
     const isActive = i === activeIdx && state.voiceMode === "standard";
-    const isFocused = i === state.voiceIdx && !state.voiceLangFocused;
+    const isFocused = i === state.voiceIdx;
     const subText = i === 0
       ? (bvl.length > 1 ? "Auto-selects best available voice" : "Device built-in · instant")
-      : (bv.local ? `${bv.lang} · on-device` : `${bv.lang} · instant`);
+      : `${bv.lang} · instant`;
     return el("div", {
       class: `voice-option${isFocused ? " focused" : ""}${isActive ? " active-voice" : ""}`,
       onclick: () => { state.voiceIdx = i; selectVoiceIdx(i); },
@@ -1198,21 +1174,19 @@ function renderVoice() {
       ),
     );
   });
-
   const browserContainerH = Math.min(bvl.length, VISIBLE_BROWSER) * VOICE_ITEM_H;
   const browserScroll = el("div", { class: "list-scroll" }, ...browserRows);
   browserScroll.style.transform = `translateY(-${bOffset * VOICE_ITEM_H}px)`;
 
   // ── Kokoro voices ──────────────────────────────────────────
-  const kokoroFocused = state.voiceIdx - firstKokoroIdx; // 0-based in fkv
-  const kOffset = (!state.voiceLangFocused && state.voiceIdx >= firstKokoroIdx)
-    ? Math.max(0, Math.min(kokoroFocused - 1, fkv.length - VISIBLE_KOKORO))
+  const kFocused = state.voiceIdx - firstKokoroIdx;
+  const kOffset = state.voiceIdx >= firstKokoroIdx
+    ? Math.max(0, Math.min(kFocused - 1, fkv.length - VISIBLE_KOKORO))
     : 0;
-
   const kokoroRows = fkv.map((v, i) => {
     const itemIdx = firstKokoroIdx + i;
     const isActive = itemIdx === activeIdx;
-    const isFocused = itemIdx === state.voiceIdx && !state.voiceLangFocused;
+    const isFocused = itemIdx === state.voiceIdx;
     return el("div", {
       class: `voice-option${isFocused ? " focused" : ""}${isActive ? " active-voice" : ""}`,
       onclick: () => { state.voiceIdx = itemIdx; selectVoiceIdx(itemIdx); },
@@ -1230,20 +1204,8 @@ function renderVoice() {
       ),
     );
   });
-
   const kokoroScroll = el("div", { class: "list-scroll" }, ...kokoroRows);
   kokoroScroll.style.transform = `translateY(-${kOffset * VOICE_ITEM_H}px)`;
-
-  // ── Language picker ────────────────────────────────────────
-  const activeLang = KOKORO_LANGUAGES.find(l => l.id === state.kokoroLang) || KOKORO_LANGUAGES[0];
-  const langIdx = KOKORO_LANGUAGES.indexOf(activeLang);
-  const prevLang = KOKORO_LANGUAGES[(langIdx - 1 + KOKORO_LANGUAGES.length) % KOKORO_LANGUAGES.length];
-  const nextLang = KOKORO_LANGUAGES[(langIdx + 1) % KOKORO_LANGUAGES.length];
-  const langRow = el("div", { class: `voice-lang-row${state.voiceLangFocused ? " focused" : ""}` },
-    el("span", { class: "voice-lang-arrow", onclick: () => { state.kokoroLang = prevLang.id; state.voiceIdx = firstKokoroIdx; render(); } }, "‹"),
-    el("span", { class: "voice-lang-label" }, `${activeLang.flag} ${activeLang.label}`),
-    el("span", { class: "voice-lang-arrow", onclick: () => { state.kokoroLang = nextLang.id; state.voiceIdx = firstKokoroIdx; render(); } }, "›"),
-  );
 
   return el("div", { class: "screen active" },
     el("div", { class: "screen-header" },
@@ -1251,23 +1213,17 @@ function renderVoice() {
       el("div", { class: "screen-title" }, "Voice"),
       el("div", { class: "screen-subtitle" }, "Free · On-device"),
     ),
-    // ── Instant · Browser section (fixed height, translateY scroll)
     el("div", { class: "voice-fixed" },
       el("div", { class: "voice-divider" }, "Instant · Browser"),
     ),
-    el("div", {
-      class: "list-container",
-      style: `height:${browserContainerH}px; flex:none;`,
-    }, browserScroll),
-    // ── AI Voices · Kokoro section
+    el("div", { class: "list-container", style: `height:${browserContainerH}px; flex:none;` }, browserScroll),
     el("div", { class: "voice-fixed" },
-      el("div", { class: "voice-divider" }, "AI Voices · Kokoro"),
-      langRow,
+      el("div", { class: "voice-divider" }, "AI Voices · Kokoro · English"),
     ),
     el("div", { class: "list-container" }, kokoroScroll),
     keysHint([
       { keys: ["↑↓"], label: "scroll" },
-      { keys: ["←→"], label: state.voiceLangFocused ? "change lang" : "back / select" },
+      { keys: ["←"], label: "back" },
       { keys: ["↵"], label: "select" },
     ])
   );
