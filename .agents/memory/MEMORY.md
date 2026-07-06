@@ -1,1 +1,2 @@
 - [TTS audio cache poisoning](tts-audio-cache-poisoning.md) — snapshot cache key + generation inputs atomically before any await; bump the IndexedDB name to purge poisoned client caches.
+- [Browser TTS engine constraints](browser-tts-engine-constraints.md) — Herald is static-only, so only in-browser engines work: Kokoro (one shared model) + Piper via vits-web (~60 MB per voice); server models are out.

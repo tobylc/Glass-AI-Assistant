@@ -15,7 +15,7 @@ A Bible reading app for the Meta Ray-Ban Display glasses, built on the Herald pl
 - Frontend: Vanilla JS + CSS (no build step required — Herald compatible)
 - API: Express 5
 - Bible data: [bible-api.com](https://bible-api.com) — free, no auth, KJV
-- TTS: Web Speech API (built-in browser)
+- TTS: three engines, all free & on-device — Web Speech API (instant), Kokoro-82M via kokoro-js (best quality, one ~86 MB model for all voices), Piper via @diffusionstudio/vits-web (fast, ~60 MB per voice, stored in OPFS). Generated audio cached in IndexedDB keyed by translation|voice|book|chapter|verse.
 - Build/preview: Vite
 
 ## Where things live

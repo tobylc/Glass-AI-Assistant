@@ -165,8 +165,28 @@ const KOKORO_VOICES = [
 function filteredKokoroVoices() {
   return KOKORO_VOICES.filter(v => v.lang === "en-us" || v.lang === "en-gb");
 }
+
+// ── Piper voices (open-source Rhasspy Piper, in-browser via WASM) ──
+// Each voice is its own model, downloaded once to browser storage (OPFS).
+// Generation is much faster than Kokoro — near-instant verse audio.
+const PIPER_VOICES = [
+  { id: "en_US-hfc_female-medium", name: "Sophia", gender: "Female", note: "Natural",     lang: "en-us", mb: 60 },
+  { id: "en_US-hfc_male-medium",   name: "James",  gender: "Male",   note: "Natural",     lang: "en-us", mb: 60 },
+  { id: "en_US-amy-medium",        name: "Amy",    gender: "Female", note: "Warm",        lang: "en-us", mb: 60 },
+  { id: "en_US-ryan-medium",       name: "Ryan",   gender: "Male",   note: "Clear",       lang: "en-us", mb: 60 },
+  { id: "en_GB-alba-medium",       name: "Alba",   gender: "Female", note: "Scottish",    lang: "en-gb", mb: 60 },
+  { id: "en_GB-northern_english_male-medium", name: "Arthur", gender: "Male", note: "Northern UK", lang: "en-gb", mb: 60 },
+];
+
+// Unified AI voice list shown in the Voice screen (Kokoro first, then Piper)
+function aiVoiceList() {
+  return [
+    ...filteredKokoroVoices().map(v => ({ ...v, engine: "kokoro" })),
+    ...PIPER_VOICES.map(v => ({ ...v, engine: "piper" })),
+  ];
+}
 function voiceCount() {
-  return getBrowserVoiceList().length + filteredKokoroVoices().length;
+  return getBrowserVoiceList().length + aiVoiceList().length;
 }
 
 // ── Display / appearance settings ────────────────────────────
@@ -206,7 +226,9 @@ const state = {
   browserVoiceURI: null,   // null = auto-pick best; string = specific voice URI
   aiTtsStatus: "idle",     // "idle" | "loading" | "ready" | "error"
   aiTtsProgress: 0,        // 0–100 download progress
-  aiVoiceId: "af_heart",   // Kokoro voice id
+  aiVoiceId: "af_heart",   // active AI voice id (Kokoro or Piper)
+  aiEngine: "kokoro",      // "kokoro" | "piper" — which engine aiVoiceId belongs to
+  piperVoices: {},         // { [voiceId]: { status, progress } } per-voice download state
   aiPreparing: false,      // true while pre-generating the first page batch
   whimsyStep: 0,           // index into WHIMSY_SEQ during preparing phase
   // Display settings
@@ -366,8 +388,8 @@ async function continueTTS() {
   render();
 
   if (state.voiceMode === "ai") {
-    // Queue ALL verses for the new chapter upfront — same pipeline as startKokoroTTS
-    const allPromises = verses.map((_, i) => genAudio(kokoroInstance, i));
+    // Queue ALL verses for the new chapter upfront — same pipeline as startAiTTS
+    const allPromises = verses.map((_, i) => genAudio(i));
     playKokoroVerse(0, allPromises);
   } else {
     speakVerse(0);
@@ -469,6 +491,59 @@ async function loadKokoroModel() {
   return _kokoroLoadPromise;
 }
 
+// ── Piper (VITS) TTS engine — fast per-voice open-source models ──
+let _piperModulePromise = null;
+function loadPiperModule() {
+  if (!_piperModulePromise) _piperModulePromise = import("@diffusionstudio/vits-web");
+  return _piperModulePromise;
+}
+
+function piperState(voiceId) {
+  return state.piperVoices[voiceId] || { status: "idle", progress: 0 };
+}
+
+// Mark already-downloaded Piper models as ready (called once at startup)
+async function refreshPiperStored() {
+  try {
+    const piper = await loadPiperModule();
+    const ids = await piper.stored();
+    for (const id of ids) state.piperVoices[id] = { status: "ready", progress: 100 };
+    if (ids.length && state.screen === "voice") render();
+  } catch {}
+}
+
+// Download a Piper voice model with progress; resolves true when ready
+async function ensurePiperVoice(voiceId) {
+  if (piperState(voiceId).status === "ready") return true;
+  if (piperState(voiceId).status === "loading") {
+    // Another caller is already downloading this voice — wait for it
+    while (piperState(voiceId).status === "loading") await new Promise(r => setTimeout(r, 200));
+    return piperState(voiceId).status === "ready";
+  }
+  state.piperVoices[voiceId] = { status: "loading", progress: 0 };
+  render();
+  try {
+    const piper = await loadPiperModule();
+    await piper.download(voiceId, (p) => {
+      if (p.total > 0) {
+        const pct = Math.round((p.loaded / p.total) * 100);
+        if (pct !== piperState(voiceId).progress) {
+          state.piperVoices[voiceId] = { status: "loading", progress: pct };
+          render();
+        }
+      }
+    });
+    state.piperVoices[voiceId] = { status: "ready", progress: 100 };
+    render();
+    return true;
+  } catch (err) {
+    console.error("Piper download failed:", err);
+    state.piperVoices[voiceId] = { status: "error", progress: 0 };
+    render();
+    return false;
+  }
+}
+
 // ── IndexedDB audio cache ─────────────────────────────────────
 
 function getAudioDb() {
@@ -491,10 +566,18 @@ function englishVoiceId(id) {
   return (v && (v.lang === "en-us" || v.lang === "en-gb")) ? id : "af_heart";
 }
 
+// The validated AI voice id for the active engine (always English)
+function activeAiVoiceId() {
+  if (state.aiEngine === "piper") {
+    return PIPER_VOICES.some(v => v.id === state.aiVoiceId) ? state.aiVoiceId : PIPER_VOICES[0].id;
+  }
+  return englishVoiceId(state.aiVoiceId);
+}
+
 function audioCacheKey(idx) {
   if (!state.verses[idx]) return null;
   const abbr = BOOKS[state.bookIdx]?.abbr ?? "?";
-  return `${state.translation}|${englishVoiceId(state.aiVoiceId)}|${abbr}|${state.chapterIdx + 1}|${state.verses[idx].verse}`;
+  return `${state.translation}|${activeAiVoiceId()}|${abbr}|${state.chapterIdx + 1}|${state.verses[idx].verse}`;
 }
 
 async function getCachedAudio(key) {
@@ -524,13 +607,14 @@ function setCachedAudio(key, buffer) {
 // ── AI (Kokoro) TTS pipeline ─────────────────────────────────
 
 // Generate one verse audio with cache check + single-WASM semaphore.
-// CRITICAL: voice, text, and cache key are snapshotted together at call time
-// so the stored audio ALWAYS matches its key — even if the user switches
-// voice/chapter/translation while this call is queued behind the semaphore.
-async function genAudio(tts, idx) {
+// CRITICAL: engine, voice, text, and cache key are snapshotted together at
+// call time so the stored audio ALWAYS matches its key — even if the user
+// switches voice/chapter/translation while queued behind the semaphore.
+async function genAudio(idx) {
   if (idx < 0 || idx >= state.verses.length) return null;
 
-  const voice = englishVoiceId(state.aiVoiceId);
+  const engine = state.aiEngine;
+  const voice = activeAiVoiceId();
   const text = state.verses[idx].text.trim();
   const abbr = BOOKS[state.bookIdx]?.abbr ?? "?";
   const key = `${state.translation}|${voice}|${abbr}|${state.chapterIdx + 1}|${state.verses[idx].verse}`;
@@ -547,25 +631,39 @@ async function genAudio(tts, idx) {
 
   generationBusy = true;
   try {
-    const audio = await tts.generate(text, { voice, speed: 0.88 });
-    const wav = audio.toWav();
-    setCachedAudio(key, wav.buffer ?? wav);
-    return audio;
-  } catch { return null; }
+    let bytes;
+    if (engine === "piper") {
+      const piper = await loadPiperModule();
+      const blob = await piper.predict({ text, voiceId: voice });
+      bytes = new Uint8Array(await blob.arrayBuffer());
+    } else {
+      if (!kokoroInstance) return null;
+      const audio = await kokoroInstance.generate(text, { voice, speed: 0.88 });
+      const wav = audio.toWav();
+      bytes = wav instanceof Uint8Array ? wav : new Uint8Array(wav);
+    }
+    setCachedAudio(key, bytes.buffer);
+    return { toWav: () => bytes };
+  } catch (err) { console.error("TTS generation failed:", err); return null; }
   finally { generationBusy = false; }
 }
 
 // Background: silently pre-generate all verses for the current chapter
 async function prefetchChapterAudio() {
-  const tts = kokoroInstance;
-  if (!tts || state.aiTtsStatus !== "ready" || !state.verses.length) return;
+  if (!state.verses.length) return;
+  // Only prefetch when the active engine is ready to generate
+  if (state.aiEngine === "piper") {
+    if (piperState(activeAiVoiceId()).status !== "ready") return;
+  } else {
+    if (!kokoroInstance || state.aiTtsStatus !== "ready") return;
+  }
 
-  const token = `${state.translation}|${englishVoiceId(state.aiVoiceId)}|${state.bookIdx}|${state.chapterIdx}`;
+  const token = `${state.aiEngine}|${state.translation}|${activeAiVoiceId()}|${state.bookIdx}|${state.chapterIdx}`;
   prefetchToken = token;
 
   for (let i = 0; i < state.verses.length; i++) {
     if (prefetchToken !== token) return; // chapter or voice changed
-    await genAudio(tts, i); // no-op if already cached; serializes through generationBusy
+    await genAudio(i); // no-op if already cached; serializes through generationBusy
     await new Promise(r => setTimeout(r, 20)); // yield to event loop between verses
   }
 }
@@ -607,7 +705,7 @@ async function playKokoroVerse(idx, allPromises) {
   // Await the pre-queued promise — resolves immediately if cached, waits if still generating
   const audio = (allPromises && idx < allPromises.length)
     ? await allPromises[idx]
-    : await genAudio(kokoroInstance, idx);
+    : await genAudio(idx);
 
   if (!ttsActive) return;
   if (!audio) {
@@ -642,12 +740,15 @@ async function playKokoroVerse(idx, allPromises) {
 }
 
 // Entry point: pre-generate ALL chapter verses, then start playing
-async function startKokoroTTS(startIdx) {
+async function startAiTTS(startIdx) {
   // (whimsy + aiPreparing already set synchronously in startTTS before this call)
   prefetchToken = null; // cancel any background prefetch — we take over generation
 
-  const tts = await loadKokoroModel();
-  if (!tts || !ttsActive) {
+  // Load whichever engine the active voice belongs to
+  const ok = state.aiEngine === "piper"
+    ? await ensurePiperVoice(activeAiVoiceId())
+    : !!(await loadKokoroModel());
+  if (!ok || !ttsActive) {
     // Model failed or user cancelled — clean up completely
     stopWhimsyTimer();
     state.aiPreparing = false;
@@ -659,7 +760,7 @@ async function startKokoroTTS(startIdx) {
 
   // Queue ALL chapter verses upfront — WASM serializes them one by one automatically.
   // This keeps the generation pipeline always running ahead of playback.
-  const allPromises = state.verses.map((_, i) => genAudio(tts, i));
+  const allPromises = state.verses.map((_, i) => genAudio(i));
 
   // Short buffer if starting verse is cached; longer if it needs generating
   const firstKey = audioCacheKey(startIdx);
@@ -691,7 +792,7 @@ function startTTS() {
     startWhimsyTimer();
     state.aiPreparing = true;
     render();
-    startKokoroTTS(startIdx);
+    startAiTTS(startIdx);
   } else {
     speakVerse(startIdx);
   }
@@ -1025,14 +1126,20 @@ function selectVoiceIdx(idx) {
     state.voiceMode = "standard";
     state.browserVoiceURI = bvl[idx].uri;
   } else {
-    const fkv = filteredKokoroVoices();
-    const kv = fkv[idx - bvl.length];
-    if (kv) {
+    const av = aiVoiceList()[idx - bvl.length];
+    if (av) {
       state.voiceMode = "ai";
-      state.aiVoiceId = kv.id;
-      if (state.aiTtsStatus === "idle") loadKokoroModel();
-      // Model already downloaded → start caching this chapter with the new voice now
-      else if (state.aiTtsStatus === "ready") prefetchChapterAudio();
+      state.aiEngine = av.engine;
+      state.aiVoiceId = av.id;
+      if (av.engine === "piper") {
+        // Download the voice model now (if needed), then cache this chapter
+        ensurePiperVoice(av.id).then(ok => { if (ok) prefetchChapterAudio(); });
+      } else if (state.aiTtsStatus === "idle") {
+        loadKokoroModel();
+      } else if (state.aiTtsStatus === "ready") {
+        // Model already downloaded → start caching this chapter with the new voice now
+        prefetchChapterAudio();
+      }
     }
   }
   state.voiceLangFocused = false;
@@ -1045,14 +1152,17 @@ function currentVoiceIdx() {
     const bi = bvl.findIndex(v => v.uri === state.browserVoiceURI);
     return bi >= 0 ? bi : 0;
   }
-  const fkv = filteredKokoroVoices();
-  const ki = fkv.findIndex(v => v.id === state.aiVoiceId);
+  const avl = aiVoiceList();
+  const ki = avl.findIndex(v => v.engine === state.aiEngine && v.id === state.aiVoiceId);
   return ki >= 0 ? bvl.length + ki : bvl.length;
 }
 
-// If current Kokoro voice is non-English, silently reset to Grace (af_heart)
+// If current AI voice is invalid/non-English for its engine, silently reset
 function resetToEnglishVoice() {
-  if (state.voiceMode === "ai") {
+  if (state.voiceMode !== "ai") return;
+  if (state.aiEngine === "piper") {
+    if (!PIPER_VOICES.some(v => v.id === state.aiVoiceId)) state.aiVoiceId = PIPER_VOICES[0].id;
+  } else {
     const v = KOKORO_VOICES.find(v => v.id === state.aiVoiceId);
     if (v && v.lang !== "en-us" && v.lang !== "en-gb") {
       state.aiVoiceId = "af_heart";
@@ -1081,10 +1191,13 @@ function applyTranslationChange(newId) {
 
 function renderHome() {
   const activeTrans = TRANSLATIONS.find(t => t.id === state.translation) || TRANSLATIONS[0];
-  const activeKV = KOKORO_VOICES.find(v => v.id === state.aiVoiceId);
+  const activeAV = aiVoiceList().find(v => v.engine === state.aiEngine && v.id === state.aiVoiceId);
   const activeBV = state.browserVoices.find(v => v.uri === state.browserVoiceURI);
+  const aiDownloading = state.aiEngine === "piper"
+    ? piperState(activeAiVoiceId()).status === "loading" ? piperState(activeAiVoiceId()).progress : null
+    : state.aiTtsStatus === "loading" ? state.aiTtsProgress : null;
   const voiceHint = state.voiceMode === "ai"
-    ? (state.aiTtsStatus === "loading" ? `${state.aiTtsProgress}%` : (activeKV ? activeKV.name : "AI ✦"))
+    ? (aiDownloading !== null ? `${aiDownloading}%` : (activeAV ? activeAV.name : "AI ✦"))
     : (activeBV ? activeBV.name : "Standard");
   const sizeLabel = { xs: "XS", sm: "Small", md: "Medium", lg: "Large", xl: "X-Large" }[state.textSize] || "Medium";
   const fontLabel = { sans: "Sans", serif: "Serif", mono: "Mono" }[state.fontFamily] || "Sans";
@@ -1169,7 +1282,7 @@ function renderVoice() {
   const VISIBLE_BROWSER = 3;
   const VISIBLE_KOKORO  = 4;
   const bvl = getBrowserVoiceList();
-  const fkv = filteredKokoroVoices();
+  const avl = aiVoiceList();
   const activeIdx = currentVoiceIdx();
   const firstKokoroIdx = bvl.length;
   const aiStatus = state.aiTtsStatus;
@@ -1204,15 +1317,33 @@ function renderVoice() {
   const browserScroll = el("div", { class: "list-scroll" }, ...browserRows);
   browserScroll.style.transform = `translateY(-${bOffset * VOICE_ITEM_H}px)`;
 
-  // ── Kokoro voices ──────────────────────────────────────────
+  // ── AI voices (Kokoro + Piper, one scrolling list) ─────────
   const kFocused = state.voiceIdx - firstKokoroIdx;
   const kOffset = state.voiceIdx >= firstKokoroIdx
-    ? Math.max(0, Math.min(kFocused - 1, fkv.length - VISIBLE_KOKORO))
+    ? Math.max(0, Math.min(kFocused - 1, avl.length - VISIBLE_KOKORO))
     : 0;
-  const kokoroRows = fkv.map((v, i) => {
+  const aiRows = avl.map((v, i) => {
     const itemIdx = firstKokoroIdx + i;
-    const isActive = itemIdx === activeIdx;
+    const isActive = itemIdx === activeIdx && state.voiceMode === "ai";
     const isFocused = itemIdx === state.voiceIdx;
+
+    // Badge + progress: Kokoro shares one model (badge on first Kokoro row);
+    // each Piper voice is its own model (badge on every Piper row)
+    let badge = null, progressPct = null;
+    if (v.engine === "kokoro" && i === 0) {
+      badge = aiSub;
+      if (aiStatus === "loading") progressPct = state.aiTtsProgress;
+    } else if (v.engine === "piper") {
+      const ps = piperState(v.id);
+      badge = {
+        idle:    `~${v.mb} MB · one-time download`,
+        loading: `Downloading… ${ps.progress}%`,
+        ready:   "Downloaded · on-device",
+        error:   "Failed · tap to retry",
+      }[ps.status];
+      if (ps.status === "loading") progressPct = ps.progress;
+    }
+
     return el("div", {
       class: `voice-option${isFocused ? " focused" : ""}${isActive ? " active-voice" : ""}`,
       onclick: () => { state.voiceIdx = itemIdx; selectVoiceIdx(itemIdx); },
@@ -1220,17 +1351,17 @@ function renderVoice() {
       el("div", { class: "voice-check" }, isActive ? "✓" : ""),
       el("div", { class: "voice-info" },
         el("div", { class: "voice-name" }, v.name),
-        el("div", { class: "voice-sub" }, `${v.gender} · ${v.note}`),
-        i === 0 ? el("div", { class: "voice-badge" }, aiSub) : null,
-        i === 0 && aiStatus === "loading"
+        el("div", { class: "voice-sub" }, `${v.gender} · ${v.note} · ${v.engine === "piper" ? "Piper" : "Kokoro"}`),
+        badge ? el("div", { class: "voice-badge" }, badge) : null,
+        progressPct !== null
           ? el("div", { class: "voice-progress-bar" },
-              el("div", { class: "voice-progress-fill", style: `width:${state.aiTtsProgress}%` })
+              el("div", { class: "voice-progress-fill", style: `width:${progressPct}%` })
             )
           : null,
       ),
     );
   });
-  const kokoroScroll = el("div", { class: "list-scroll" }, ...kokoroRows);
+  const kokoroScroll = el("div", { class: "list-scroll" }, ...aiRows);
   kokoroScroll.style.transform = `translateY(-${kOffset * VOICE_ITEM_H}px)`;
 
   return el("div", { class: "screen active" },
@@ -1244,7 +1375,7 @@ function renderVoice() {
     ),
     el("div", { class: "list-container", style: `height:${browserContainerH}px; flex:none;` }, browserScroll),
     el("div", { class: "voice-fixed" },
-      el("div", { class: "voice-divider" }, "AI Voices · Kokoro · English"),
+      el("div", { class: "voice-divider" }, "AI Voices · English"),
     ),
     el("div", { class: "list-container" }, kokoroScroll),
     keysHint([
@@ -1592,3 +1723,4 @@ function render() {
 
 // ── Init ──────────────────────────────────────────────────────
 render();
+refreshPiperStored(); // mark any previously downloaded Piper voices as ready
