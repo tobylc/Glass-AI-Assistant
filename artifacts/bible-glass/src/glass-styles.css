@@ -811,3 +811,80 @@ html, body {
   0%, 100% { transform: scaleY(0.6); }
   50% { transform: scaleY(1); }
 }
+
+/* ── Display settings screen ── */
+.display-preview {
+  margin: 10px 20px 6px;
+  padding: 12px 14px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-height: 56px;
+}
+
+.display-preview .verse-text {
+  font-style: italic;
+}
+
+.display-settings {
+  flex: 1;
+  padding: 6px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.display-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  transition: background 0.12s, border-color 0.12s;
+  cursor: pointer;
+}
+
+.display-row.focused {
+  background: var(--surface-focus);
+  border-color: var(--gold-dim);
+}
+
+.display-row-label {
+  font-size: 13px;
+  color: var(--white-80);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.display-row.focused .display-row-label {
+  color: var(--white);
+}
+
+.display-row-value {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.display-arrow {
+  font-size: 16px;
+  color: var(--gold);
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 1;
+  user-select: none;
+}
+
+.display-arrow.dim {
+  color: var(--border);
+  cursor: default;
+}
+
+.display-row-current {
+  font-size: 12px;
+  color: var(--gold);
+  min-width: 70px;
+  text-align: center;
+  font-weight: 500;
+}

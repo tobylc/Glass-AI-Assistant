@@ -137,6 +137,14 @@ const KOKORO_VOICES = [
 // Flat index helpers: voice list idx 0 = Standard, idx 1-10 = KOKORO_VOICES[0-9]
 const VOICE_COUNT = 1 + KOKORO_VOICES.length; // 11
 
+// ── Display / appearance settings ────────────────────────────
+const DISPLAY_SETTINGS = [
+  { key: "textSize",   label: "Size",    options: ["xs","sm","md","lg","xl"],      labels: ["XS","Small","Medium","Large","X-Large"] },
+  { key: "fontFamily", label: "Font",    options: ["sans","serif","mono"],          labels: ["Sans-serif","Serif","Monospace"] },
+  { key: "textWeight", label: "Weight",  options: ["light","normal","bold"],        labels: ["Light","Normal","Bold"] },
+  { key: "lineHeight", label: "Spacing", options: ["compact","normal","relaxed"],   labels: ["Compact","Normal","Relaxed"] },
+];
+
 // ── State ────────────────────────────────────────────────────
 const state = {
   screen: "home",       // home | books | chapters | reading | search | translations
@@ -165,6 +173,12 @@ const state = {
   aiVoiceId: "af_heart",   // Kokoro voice id
   aiPreparing: false,      // true while pre-generating the first page batch
   whimsyStep: 0,           // index into WHIMSY_SEQ during preparing phase
+  // Display settings
+  textSize:   "md",        // "xs" | "sm" | "md" | "lg" | "xl"
+  fontFamily: "sans",      // "sans" | "serif" | "mono"
+  textWeight: "light",     // "light" | "normal" | "bold"
+  lineHeight: "normal",    // "compact" | "normal" | "relaxed"
+  displayRow: 0,           // focused row in display settings screen
 };
 
 // ── TTS ───────────────────────────────────────────────────────
@@ -668,7 +682,7 @@ document.addEventListener("keydown", (e) => {
 
   if (state.screen === "home") {
     if (key === "ArrowDown") {
-      state.listIdx = Math.min(state.listIdx + 1, 3);
+      state.listIdx = Math.min(state.listIdx + 1, 4);
       render();
     } else if (key === "ArrowUp") {
       state.listIdx = Math.max(state.listIdx - 1, 0);
@@ -677,7 +691,8 @@ document.addEventListener("keydown", (e) => {
       if (state.listIdx === 0) { state.listIdx = 0; navigate("books"); }
       else if (state.listIdx === 1) { navigate("search"); }
       else if (state.listIdx === 2) { state.translationIdx = TRANSLATIONS.findIndex(t => t.id === state.translation); navigate("translations"); }
-      else { state.voiceIdx = currentVoiceIdx(); navigate("voice"); }
+      else if (state.listIdx === 3) { state.voiceIdx = currentVoiceIdx(); navigate("voice"); }
+      else { navigate("display"); }
     }
     return;
   }
@@ -708,6 +723,26 @@ document.addEventListener("keydown", (e) => {
       state.translation = TRANSLATIONS[state.translationIdx].id;
       navigate("home");
     } else if (key === "Escape" || key === "ArrowLeft") {
+      navigate("home");
+    }
+    return;
+  }
+
+  if (state.screen === "display") {
+    const s = DISPLAY_SETTINGS[state.displayRow];
+    if (key === "ArrowDown") {
+      state.displayRow = Math.min(state.displayRow + 1, DISPLAY_SETTINGS.length - 1);
+      render();
+    } else if (key === "ArrowUp") {
+      state.displayRow = Math.max(state.displayRow - 1, 0);
+      render();
+    } else if (key === "ArrowRight") {
+      const cur = s.options.indexOf(state[s.key]);
+      if (cur < s.options.length - 1) { state[s.key] = s.options[cur + 1]; render(); }
+    } else if (key === "ArrowLeft") {
+      const cur = s.options.indexOf(state[s.key]);
+      if (cur > 0) { state[s.key] = s.options[cur - 1]; render(); }
+    } else if (key === "Enter" || key === "Escape") {
       navigate("home");
     }
     return;
@@ -886,11 +921,14 @@ function renderHome() {
   const voiceHint = state.voiceMode === "ai"
     ? (state.aiTtsStatus === "loading" ? `${state.aiTtsProgress}%` : (activeKV ? activeKV.name : "AI ✦"))
     : "Standard";
+  const sizeLabel = { xs: "XS", sm: "Small", md: "Medium", lg: "Large", xl: "X-Large" }[state.textSize] || "Medium";
+  const fontLabel = { sans: "Sans", serif: "Serif", mono: "Mono" }[state.fontFamily] || "Sans";
   const items = [
-    { icon: "✦", label: "Read",        hint: "Browse Books" },
-    { icon: "⌕", label: "Search",      hint: "Find a verse" },
-    { icon: "⇄", label: "Translation", hint: activeTrans.id.toUpperCase() },
-    { icon: "♪", label: "Voice",       hint: voiceHint },
+    { icon: "✦",  label: "Read",        hint: "Browse Books" },
+    { icon: "⌕",  label: "Search",      hint: "Find a verse" },
+    { icon: "⇄",  label: "Translation", hint: activeTrans.id.toUpperCase() },
+    { icon: "♪",  label: "Voice",       hint: voiceHint },
+    { icon: "Aa", label: "Display",     hint: `${sizeLabel} · ${fontLabel}` },
   ];
 
   return el("div", { class: "screen active" },
@@ -907,7 +945,8 @@ function renderHome() {
               if (i === 0) navigate("books");
               else if (i === 1) navigate("search");
               else if (i === 2) { state.translationIdx = TRANSLATIONS.findIndex(t => t.id === state.translation); navigate("translations"); }
-              else { state.voiceIdx = currentVoiceIdx(); navigate("voice"); }
+              else if (i === 3) { state.voiceIdx = currentVoiceIdx(); navigate("voice"); }
+              else { navigate("display"); }
             }
           },
             el("span", { class: "home-item-icon" }, item.icon),
@@ -1108,12 +1147,13 @@ function renderReading() {
     (state.page + 1) * VERSES_PER_PAGE
   );
 
+  const verseStyle = buildVerseStyle();
   const verseEls = pageVerses.map((v, i) => {
     const absIdx = state.page * VERSES_PER_PAGE + i;
     const isSpeaking = state.speakingVerseIdx === absIdx;
     return el("div", { class: `verse-row${isSpeaking ? " speaking" : ""}` },
       el("span", { class: "verse-num" }, String(v.verse)),
-      el("span", { class: "verse-text" }, v.text.trim()),
+      el("span", { class: "verse-text", style: verseStyle }, v.text.trim()),
     );
   });
 
@@ -1285,6 +1325,66 @@ function keysHint(hints) {
   );
 }
 
+// ── Display settings helpers ──────────────────────────────────
+
+function buildVerseStyle() {
+  const sizes   = { xs:"11px", sm:"13px", md:"15px", lg:"18px", xl:"22px" };
+  const fonts   = { sans:"system-ui,-apple-system,sans-serif", serif:"Georgia,'Times New Roman',serif", mono:"'Courier New',Courier,monospace" };
+  const weights = { light:"300", normal:"400", bold:"700" };
+  const lhs     = { compact:"1.35", normal:"1.65", relaxed:"2.1" };
+  return `font-size:${sizes[state.textSize]||"15px"};font-family:${fonts[state.fontFamily]||"inherit"};font-weight:${weights[state.textWeight]||"300"};line-height:${lhs[state.lineHeight]||"1.65"}`;
+}
+
+function renderDisplay() {
+  const previewStyle = buildVerseStyle();
+  const sampleText = "In the beginning God created the heaven and the earth.";
+
+  return el("div", { class: "screen active" },
+    el("div", { class: "screen-header" },
+      el("div", { class: "back-btn", onclick: () => navigate("home") }, "‹"),
+      el("div", { class: "screen-title" }, "Display"),
+      el("div", { class: "screen-subtitle" }, "Text appearance"),
+    ),
+
+    el("div", { class: "display-preview" },
+      el("div", { class: "verse-row" },
+        el("span", { class: "verse-num" }, "1"),
+        el("span", { class: "verse-text", style: previewStyle }, sampleText),
+      ),
+    ),
+
+    el("div", { class: "display-settings" },
+      ...DISPLAY_SETTINGS.map((setting, rowIdx) => {
+        const cur = setting.options.indexOf(state[setting.key]);
+        const focused = state.displayRow === rowIdx;
+        return el("div", {
+          class: `display-row${focused ? " focused" : ""}`,
+          onclick: () => { state.displayRow = rowIdx; render(); },
+        },
+          el("span", { class: "display-row-label" }, setting.label),
+          el("div", { class: "display-row-value" },
+            el("span", {
+              class: `display-arrow${cur > 0 ? "" : " dim"}`,
+              onclick: (e) => { e.stopPropagation(); if (cur > 0) { state[setting.key] = setting.options[cur - 1]; render(); } },
+            }, "‹"),
+            el("span", { class: "display-row-current" }, setting.labels[cur]),
+            el("span", {
+              class: `display-arrow${cur < setting.options.length - 1 ? "" : " dim"}`,
+              onclick: (e) => { e.stopPropagation(); if (cur < setting.options.length - 1) { state[setting.key] = setting.options[cur + 1]; render(); } },
+            }, "›"),
+          ),
+        );
+      })
+    ),
+
+    keysHint([
+      { keys: ["↑↓"], label: "setting" },
+      { keys: ["←→"], label: "change" },
+      { keys: ["↵"], label: "done" },
+    ]),
+  );
+}
+
 // ── Main render ───────────────────────────────────────────────
 function render() {
   const app = document.getElementById("app");
@@ -1299,6 +1399,7 @@ function render() {
     case "search":       screenEl = renderSearch(); break;
     case "translations": screenEl = renderTranslations(); break;
     case "voice":        screenEl = renderVoice(); break;
+    case "display":      screenEl = renderDisplay(); break;
     default:             screenEl = renderHome();
   }
 
