@@ -178,6 +178,7 @@ let whimsyTimer = null;
 let generationBusy = false;
 let prefetchToken = null;
 let _audioDb = null;
+let _kokoroLoadPromise = null;   // singleton guard — prevents concurrent model loads
 let nextChapterDataCache = null; // { bookIdx, chapterNum, verses } prefetched ahead
 
 // Load voices list asynchronously (Chrome/Edge need voiceschanged event)
@@ -318,37 +319,46 @@ function speakVerse(idx) {
 // ── AI (Kokoro) TTS ───────────────────────────────────────────
 async function loadKokoroModel() {
   if (kokoroInstance) return kokoroInstance;
+  // If a load is already in flight, join it instead of starting a second one
+  if (_kokoroLoadPromise) return _kokoroLoadPromise;
+
   state.aiTtsStatus = "loading";
   state.aiTtsProgress = 0;
   render();
-  try {
-    const { KokoroTTS } = await import("kokoro-js");
-    kokoroInstance = await KokoroTTS.from_pretrained(
-      "onnx-community/Kokoro-82M-v1.0-ONNX",
-      {
-        dtype: "q8",
-        device: "wasm",
-        progress_callback: (info) => {
-          if (info.status === "progress" && info.total > 0) {
-            state.aiTtsProgress = Math.round((info.loaded / info.total) * 100);
-            render();
-          }
-        },
-      }
-    );
-    state.aiTtsStatus = "ready";
-    state.aiTtsProgress = 100;
-    render();
-    // Kick off background prefetch for whatever chapter is currently open
-    prefetchChapterAudio();
-    return kokoroInstance;
-  } catch (err) {
-    console.error("Kokoro load failed:", err);
-    state.aiTtsStatus = "error";
-    state.voiceMode = "standard";
-    render();
-    return null;
-  }
+
+  _kokoroLoadPromise = (async () => {
+    try {
+      const { KokoroTTS } = await import("kokoro-js");
+      kokoroInstance = await KokoroTTS.from_pretrained(
+        "onnx-community/Kokoro-82M-v1.0-ONNX",
+        {
+          dtype: "q8",
+          device: "wasm",
+          progress_callback: (info) => {
+            if (info.status === "progress" && info.total > 0) {
+              state.aiTtsProgress = Math.round((info.loaded / info.total) * 100);
+              render();
+            }
+          },
+        }
+      );
+      state.aiTtsStatus = "ready";
+      state.aiTtsProgress = 100;
+      render();
+      prefetchChapterAudio();
+      return kokoroInstance;
+    } catch (err) {
+      console.error("Kokoro load failed:", err);
+      state.aiTtsStatus = "error";
+      state.voiceMode = "standard";
+      render();
+      return null;
+    } finally {
+      _kokoroLoadPromise = null;
+    }
+  })();
+
+  return _kokoroLoadPromise;
 }
 
 // ── IndexedDB audio cache ─────────────────────────────────────
@@ -511,17 +521,23 @@ async function playKokoroVerse(idx, pageStart, audioPromises) {
 
 // Entry point: pre-generate the current page, then start playing
 async function startKokoroTTS(startIdx) {
-  const tts = await loadKokoroModel();
-  if (!tts || !ttsActive) return;
-
-  // Cancel background prefetch so WASM isn't contested during startup
+  // Show feedback IMMEDIATELY — don't wait for model load to start the animation
   prefetchToken = null;
-
-  // Start whimsy countdown animation
   startWhimsyTimer();
   state.aiPreparing = true;
   state.speaking = true;
   render();
+
+  const tts = await loadKokoroModel();
+  if (!tts || !ttsActive) {
+    // Model failed or user cancelled — clean up completely
+    stopWhimsyTimer();
+    state.aiPreparing = false;
+    state.speaking = false;
+    ttsActive = false;
+    render();
+    return;
+  }
 
   // Kick off inference for ALL verses on this page (cache hits resolve instantly)
   const pageEnd = Math.min(startIdx + VERSES_PER_PAGE, state.verses.length);
