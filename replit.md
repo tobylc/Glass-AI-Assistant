@@ -15,7 +15,8 @@ A Bible reading app for the Meta Ray-Ban Display glasses, built on the Herald pl
 - Frontend: Vanilla JS + CSS (no build step required — Herald compatible)
 - API: Express 5
 - Bible data: [bible-api.com](https://bible-api.com) — free, no auth, KJV
-- TTS: three engines, all free & on-device — Web Speech API (instant), Kokoro-82M via kokoro-js (best quality, one ~86 MB model for all voices), Piper via @diffusionstudio/vits-web (fast, ~60 MB per voice, stored in OPFS). Generated audio cached in IndexedDB keyed by translation|voice|book|chapter|verse.
+- TTS: three engines, all free & on-device — Web Speech API (instant), Kokoro-82M via kokoro-js (best quality, one shared model: fp32 ~330 MB on desktop WebGPU, q8 ~86 MB on WASM), Piper via @diffusionstudio/vits-web (fast, ~60 MB per voice, stored in OPFS). Generated audio cached in IndexedDB (`bible-tts-v3`) keyed by translation|voice|book|chapter|verse.
+- AI playback is session-based: an immutable session snapshot + per-chapter contexts; audio generation runs ahead of playback continuously, pre-fetching and pre-generating the next chapter (across book boundaries) for gapless listening from any verse to Revelation.
 - Build/preview: Vite
 
 ## Where things live
@@ -35,7 +36,8 @@ A Bible reading app for the Meta Ray-Ban Display glasses, built on the Herald pl
 ## Product
 
 - Browse all 66 Bible books → chapters → read passage on the glasses display
-- Listen to any passage with text-to-speech (Space bar or ♪ button)
+- Listen to any passage with text-to-speech (Space bar or ♪ button) — plays continuously across chapters and books until stopped
+- Reading speed setting under Display: Slow (0.75×) / Calm (0.85×, default) / Normal (1.0×), applied live to playing audio
 - Search by verse reference (e.g. "John 3:16")
 - Navigate with D-pad: ↑↓ scroll, → select, ← back, Space = TTS toggle
 - Paginated reading (4 verses per "page") fits the 600×600 HUD lens
@@ -53,7 +55,8 @@ _Populate as you build — explicit user instructions worth remembering across s
 
 ## Gotchas
 
-- `bible-api.com` has CORS enabled for browser requests — no proxy needed.
+- **kokoro-js dtype/device**: q8 + WebGPU produces garbled noise (upstream kokoro#98) — WebGPU needs fp32; Android WebGPU is broken entirely. The app auto-selects fp32+WebGPU on desktop, WASM+q8 elsewhere. If engine config ever changes, bump the IndexedDB name (currently `bible-tts-v3`) to purge any poisoned cached audio.
+- `bible-api.com` has CORS enabled for browser requests — no proxy needed, but it rate-limits bursts (those responses lack CORS headers and surface as fetch/CORS console errors). The playback pipeline retries with backoff.
 - The Vite config requires `PORT` and `BASE_PATH` env vars (set automatically by the workflow).
 - The old `src/main.tsx` / `src/App.tsx` React files are unused scaffolding — they don't affect the running app but can be deleted.
 

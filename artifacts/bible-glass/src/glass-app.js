@@ -195,7 +195,19 @@ const DISPLAY_SETTINGS = [
   { key: "fontFamily", label: "Font",    options: ["sans","serif","mono"],          labels: ["Sans-serif","Serif","Monospace"] },
   { key: "textWeight", label: "Weight",  options: ["light","normal","bold"],        labels: ["Light","Normal","Bold"] },
   { key: "lineHeight", label: "Spacing", options: ["compact","normal","relaxed"],   labels: ["Compact","Normal","Relaxed"] },
+  { key: "voiceSpeed", label: "Speed",   options: ["slow","calm","normal"],          labels: ["Slow","Calm","Normal"] },
 ];
+
+// Voice reading speed → playback rate (pitch is preserved by the browser)
+const VOICE_SPEED_RATES = { slow: 0.75, calm: 0.85, normal: 1.0 };
+function voicePlaybackRate() { return VOICE_SPEED_RATES[state.voiceSpeed] ?? 0.85; }
+
+// Apply a display-setting change that affects live playback immediately
+function onDisplaySettingChange(key) {
+  if (key === "voiceSpeed" && currentAudioEl) {
+    currentAudioEl.playbackRate = voicePlaybackRate();
+  }
+}
 
 // ── State ────────────────────────────────────────────────────
 const state = {
@@ -236,6 +248,7 @@ const state = {
   fontFamily: "sans",      // "sans" | "serif" | "mono"
   textWeight: "light",     // "light" | "normal" | "bold"
   lineHeight: "normal",    // "compact" | "normal" | "relaxed"
+  voiceSpeed: "calm",      // "slow" | "calm" | "normal" — reading speed
   displayRow: 0,           // focused row in display settings screen
 };
 
@@ -247,8 +260,9 @@ let ttsQueue = [];
 let ttsActive = false;
 let kokoroInstance = null;
 let whimsyTimer = null;
-let generationBusy = false;
-let prefetchToken = null;
+let ttsSession = null;           // active AI playback session (snapshot of engine/voice/translation)
+let _sessionCounter = 0;
+let _genChain = Promise.resolve(); // FIFO queue — one audio generation at a time, in order
 let _audioDb = null;
 let _kokoroLoadPromise = null;   // singleton guard — prevents concurrent model loads
 let nextChapterDataCache = null; // { bookIdx, chapterNum, verses } prefetched ahead
@@ -324,6 +338,7 @@ function getBestSystemVoice() {
 }
 
 function stopTTS() {
+  ttsSession = null; // invalidates the generation pump + playback loop
   speechSynth.cancel();
   if (currentAudioEl) {
     currentAudioEl.pause();
@@ -341,7 +356,8 @@ function stopTTS() {
   render();
 }
 
-// ── Continuous playback: advance to next chapter / book ───────
+// ── Continuous playback (browser-voice mode only) ─────────────
+// AI-voice mode advances chapters via advanceSessionChapter instead.
 async function prefetchNextChapterData() {
   const book = BOOKS[state.bookIdx];
   let nextBookIdx = state.bookIdx;
@@ -387,13 +403,7 @@ async function continueTTS() {
   state.loading = false;
   render();
 
-  if (state.voiceMode === "ai") {
-    // Queue ALL verses for the new chapter upfront — same pipeline as startAiTTS
-    const allPromises = verses.map((_, i) => genAudio(i));
-    playKokoroVerse(0, allPromises);
-  } else {
-    speakVerse(0);
-  }
+  speakVerse(0);
 }
 
 // ── Standard (browser) TTS ────────────────────────────────────
@@ -416,7 +426,7 @@ function speakVerse(idx) {
   }
 
   const utter = new SpeechSynthesisUtterance(verse.text);
-  utter.rate = 0.90;
+  utter.rate = voicePlaybackRate();
   utter.pitch = 1.0;
   utter.lang = "en-US";
   const bestVoice = getBestSystemVoice();
@@ -429,6 +439,15 @@ function speakVerse(idx) {
 }
 
 // ── AI (Kokoro) TTS ───────────────────────────────────────────
+
+// WebGPU can only run Kokoro correctly with fp32 — quantized dtypes (q8/q4/
+// fp16) hit broken dequantization kernels in the ONNX WebGPU backend and
+// produce garbled noise (hexgrad/kokoro#98). On mobile, WebGPU output is
+// corrupted with EVERY dtype, so mobile always uses WASM + q8.
+const IS_MOBILE_UA = /Android|iPhone|iPad|Mobi/i.test(navigator.userAgent || "");
+const KOKORO_USE_WEBGPU = !IS_MOBILE_UA && !!navigator.gpu;
+const KOKORO_SIZE_LABEL = KOKORO_USE_WEBGPU ? "~330 MB" : "~86 MB";
+
 async function loadKokoroModel() {
   if (kokoroInstance) return kokoroInstance;
   // If a load is already in flight, join it instead of starting a second one
@@ -450,13 +469,13 @@ async function loadKokoroModel() {
       };
 
       // WebGPU dispatches inference to the GPU — main thread stays responsive.
-      // WASM runs synchronously on the main thread and can freeze the page.
-      const hasWebGPU = typeof navigator !== "undefined" && !!navigator.gpu;
-      if (hasWebGPU) {
+      // CRITICAL: WebGPU requires fp32. q8/q4/fp16 on WebGPU produce garbled
+      // noise instead of speech (see comment above loadKokoroModel).
+      if (KOKORO_USE_WEBGPU) {
         try {
           kokoroInstance = await KokoroTTS.from_pretrained(
             "onnx-community/Kokoro-82M-v1.0-ONNX",
-            { dtype: "q8", device: "webgpu", progress_callback: progressCb }
+            { dtype: "fp32", device: "webgpu", progress_callback: progressCb }
           );
         } catch (gpuErr) {
           console.warn("WebGPU init failed, falling back to WASM:", gpuErr);
@@ -475,7 +494,6 @@ async function loadKokoroModel() {
       state.aiTtsStatus = "ready";
       state.aiTtsProgress = 100;
       render();
-      prefetchChapterAudio();
       return kokoroInstance;
     } catch (err) {
       console.error("Kokoro load failed:", err);
@@ -548,11 +566,13 @@ async function ensurePiperVoice(voiceId) {
 
 function getAudioDb() {
   if (_audioDb) return _audioDb;
-  // v1 cache may contain audio generated with a mismatched voice (key/audio
-  // race before snapshotting was added) — delete it and start fresh
+  // Older caches may contain bad audio: v1 had a key/audio race (mismatched
+  // voice), v2 stored garbled Kokoro output generated with q8-on-WebGPU.
+  // Delete both and start fresh.
   try { indexedDB.deleteDatabase("bible-tts-v1"); } catch {}
+  try { indexedDB.deleteDatabase("bible-tts-v2"); } catch {}
   _audioDb = new Promise(resolve => {
-    const req = indexedDB.open("bible-tts-v2", 1);
+    const req = indexedDB.open("bible-tts-v3", 1);
     req.onupgradeneeded = e => e.target.result.createObjectStore("verses");
     req.onsuccess = e => resolve(e.target.result);
     req.onerror = () => { _audioDb = null; resolve(null); };
@@ -574,12 +594,6 @@ function activeAiVoiceId() {
   return englishVoiceId(state.aiVoiceId);
 }
 
-function audioCacheKey(idx) {
-  if (!state.verses[idx]) return null;
-  const abbr = BOOKS[state.bookIdx]?.abbr ?? "?";
-  return `${state.translation}|${activeAiVoiceId()}|${abbr}|${state.chapterIdx + 1}|${state.verses[idx].verse}`;
-}
-
 async function getCachedAudio(key) {
   if (!key) return null;
   try {
@@ -593,79 +607,134 @@ async function getCachedAudio(key) {
   } catch { return null; }
 }
 
+// Resolves true once the audio is durably stored, false if storage failed —
+// callers use this to decide whether they may drop their in-memory copy.
 function setCachedAudio(key, buffer) {
-  if (!key || !buffer) return;
-  getAudioDb().then(db => {
-    if (!db) return;
+  if (!key || !buffer) return Promise.resolve(false);
+  return getAudioDb().then(db => {
+    if (!db) return false;
+    return new Promise(resolve => {
+      try {
+        const tx = db.transaction("verses", "readwrite");
+        tx.objectStore("verses").put(buffer, key);
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+        tx.onabort = () => resolve(false);
+      } catch { resolve(false); }
+    });
+  }).catch(() => false);
+}
+
+// ── AI TTS pipeline (session-based, continuous) ──────────────
+//
+// A "session" is an immutable snapshot of { engine, voice, translation }
+// taken the moment the user presses listen. A "chapter ctx" is an immutable
+// snapshot of one chapter's verses. All generation reads ONLY these
+// snapshots — never live state — so cached audio ALWAYS matches its key,
+// and audio for FUTURE chapters can generate while the current one plays.
+
+function isSessionActive(session) {
+  return !!session && ttsSession === session;
+}
+
+// FIFO generation queue — one WASM/WebGPU generation at a time, in order
+function enqueueGen(fn) {
+  const run = _genChain.then(fn);
+  _genChain = run.then(() => {}, () => {});
+  return run;
+}
+
+function makeChapterCtx(bookIdx, chapterNum, verses) {
+  return { bookIdx, chapterNum, verses, promises: [], nextCtx: null, nextQueued: false };
+}
+
+function ctxCacheKey(session, ctx, idx) {
+  const v = ctx.verses[idx];
+  if (!v) return null;
+  const abbr = BOOKS[ctx.bookIdx]?.abbr ?? "?";
+  return `${session.translation}|${session.voice}|${abbr}|${ctx.chapterNum}|${v.verse}`;
+}
+
+// Generate (or load from cache) audio for one verse of an explicit chapter ctx.
+// Resolves to a LIGHTWEIGHT handle { key, bytes? } — bytes are kept in memory
+// only if IndexedDB storage failed; otherwise playback re-reads from the cache.
+// This keeps queued-ahead chapters (e.g. Psalm 119, 176 verses) from pinning
+// tens of MB of WAV data in RAM while the current chapter plays.
+async function genVerseAudio(session, ctx, idx) {
+  const v = ctx.verses[idx];
+  if (!v) return null;
+  const text = (v.text || "").trim();
+  const key = ctxCacheKey(session, ctx, idx);
+
+  const cached = await getCachedAudio(key);
+  if (cached) return { key };
+
+  return enqueueGen(async () => {
+    if (!isSessionActive(session)) return null; // user stopped — don't waste compute
+    await new Promise(r => setTimeout(r, 15));  // let the UI breathe between generations
+
+    // Re-check cache after queueing (an earlier task may have generated it)
+    const cached2 = await getCachedAudio(key);
+    if (cached2) return { key };
+
     try {
-      const tx = db.transaction("verses", "readwrite");
-      tx.objectStore("verses").put(buffer, key);
-    } catch {}
+      let bytes;
+      if (session.engine === "piper") {
+        const piper = await loadPiperModule();
+        const blob = await piper.predict({ text, voiceId: session.voice });
+        bytes = new Uint8Array(await blob.arrayBuffer());
+      } else {
+        if (!kokoroInstance) return null;
+        const audio = await kokoroInstance.generate(text, { voice: session.voice });
+        const wav = audio.toWav();
+        bytes = wav instanceof Uint8Array ? wav : new Uint8Array(wav);
+      }
+      const persisted = await setCachedAudio(key, bytes.buffer);
+      return persisted ? { key } : { key, bytes };
+    } catch (err) { console.error("TTS generation failed:", err); return null; }
   });
 }
 
-// ── AI (Kokoro) TTS pipeline ─────────────────────────────────
-
-// Generate one verse audio with cache check + single-WASM semaphore.
-// CRITICAL: engine, voice, text, and cache key are snapshotted together at
-// call time so the stored audio ALWAYS matches its key — even if the user
-// switches voice/chapter/translation while queued behind the semaphore.
-async function genAudio(idx) {
-  if (idx < 0 || idx >= state.verses.length) return null;
-
-  const engine = state.aiEngine;
-  const voice = activeAiVoiceId();
-  const text = state.verses[idx].text.trim();
-  const abbr = BOOKS[state.bookIdx]?.abbr ?? "?";
-  const key = `${state.translation}|${voice}|${abbr}|${state.chapterIdx + 1}|${state.verses[idx].verse}`;
-
-  const cached = await getCachedAudio(key);
-  if (cached) return { toWav: () => new Uint8Array(cached) };
-
-  // Only one WASM generation at a time — queue up behind any active one
-  while (generationBusy) await new Promise(r => setTimeout(r, 25));
-
-  // Re-check cache after waiting (another caller may have generated it)
-  const cached2 = await getCachedAudio(key);
-  if (cached2) return { toWav: () => new Uint8Array(cached2) };
-
-  generationBusy = true;
-  try {
-    let bytes;
-    if (engine === "piper") {
-      const piper = await loadPiperModule();
-      const blob = await piper.predict({ text, voiceId: voice });
-      bytes = new Uint8Array(await blob.arrayBuffer());
-    } else {
-      if (!kokoroInstance) return null;
-      const audio = await kokoroInstance.generate(text, { voice, speed: 0.88 });
-      const wav = audio.toWav();
-      bytes = wav instanceof Uint8Array ? wav : new Uint8Array(wav);
-    }
-    setCachedAudio(key, bytes.buffer);
-    return { toWav: () => bytes };
-  } catch (err) { console.error("TTS generation failed:", err); return null; }
-  finally { generationBusy = false; }
+// Queue generation for every verse of ctx from startIdx onward, in order
+function queueChapterGeneration(session, ctx, startIdx = 0) {
+  for (let i = startIdx; i < ctx.verses.length; i++) {
+    if (!ctx.promises[i]) ctx.promises[i] = genVerseAudio(session, ctx, i);
+  }
 }
 
-// Background: silently pre-generate all verses for the current chapter
-async function prefetchChapterAudio() {
-  if (!state.verses.length) return;
-  // Only prefetch when the active engine is ready to generate
-  if (state.aiEngine === "piper") {
-    if (piperState(activeAiVoiceId()).status !== "ready") return;
-  } else {
-    if (!kokoroInstance || state.aiTtsStatus !== "ready") return;
+// Fetch with retries — bible-api.com occasionally rate-limits bursts (those
+// responses lack CORS headers and surface as fetch failures). A dropped
+// lookahead fetch must never be able to end a listening session.
+async function fetchChapterRetry(abbr, chapterNum, translation, tries = 3) {
+  for (let i = 0; ; i++) {
+    try { return await fetchChapter(abbr, chapterNum, translation); }
+    catch (e) {
+      if (i >= tries - 1) throw e;
+      await new Promise(r => setTimeout(r, 1500 * (i + 1)));
+    }
   }
+}
 
-  const token = `${state.aiEngine}|${state.translation}|${activeAiVoiceId()}|${state.bookIdx}|${state.chapterIdx}`;
-  prefetchToken = token;
-
-  for (let i = 0; i < state.verses.length; i++) {
-    if (prefetchToken !== token) return; // chapter or voice changed
-    await genAudio(i); // no-op if already cached; serializes through generationBusy
-    await new Promise(r => setTimeout(r, 20)); // yield to event loop between verses
-  }
+// Rolling pre-cache: as soon as a chapter starts playing, fetch the NEXT
+// chapter's text and queue its audio generation behind the current chapter's.
+// Crosses book boundaries; keeps going until the user stops or the Bible ends.
+function ensureNextChapterQueued(session, ctx) {
+  if (ctx.nextQueued) return;
+  ctx.nextQueued = true;
+  (async () => {
+    let nb = ctx.bookIdx, nc = ctx.chapterNum + 1;
+    if (nc > BOOKS[nb].chapters) { nb += 1; nc = 1; }
+    if (nb >= BOOKS.length) return; // end of Revelation — nothing after
+    try {
+      const verses = await fetchChapterRetry(BOOKS[nb].abbr, nc, session.translation);
+      if (!isSessionActive(session)) return;
+      const next = makeChapterCtx(nb, nc, verses);
+      queueChapterGeneration(session, next, 0);
+      ctx.nextCtx = next;
+    } catch {
+      ctx.nextQueued = false; // fetch failed — advance will retry on demand
+    }
+  })();
 }
 
 // ── Whimsy countdown timer ────────────────────────────────────
@@ -684,10 +753,11 @@ function stopWhimsyTimer() {
   state.whimsyStep = 0;
 }
 
-// Play a verse; allPromises covers the entire chapter (indexed by verse position)
-async function playKokoroVerse(idx, allPromises) {
-  if (idx >= state.verses.length) { if (ttsActive) continueTTS(); return; }
-  if (!ttsActive) return;
+// Play one verse of a chapter ctx, then advance — verse by verse, chapter by
+// chapter, book by book — until the user stops or the Bible ends.
+async function playCtxVerse(session, ctx, idx) {
+  if (!isSessionActive(session)) return;
+  if (idx >= ctx.verses.length) { advanceSessionChapter(session, ctx); return; }
 
   // Keep display page in sync with spoken verse
   const newPage = Math.floor(idx / VERSES_PER_PAGE);
@@ -697,37 +767,42 @@ async function playKokoroVerse(idx, allPromises) {
   state.speaking = true;
   render();
 
-  // Pre-fetch next chapter text when starting the last page of this chapter
-  if (idx === Math.max(0, state.verses.length - VERSES_PER_PAGE)) {
-    prefetchNextChapterData();
+  // Resolves instantly if pre-generated/cached; waits only if generation is behind
+  const handle = await (ctx.promises[idx] || genVerseAudio(session, ctx, idx));
+
+  if (!isSessionActive(session)) return;
+  ctx.promises[idx] = null; // release the handle — audio lives in IndexedDB
+
+  // Handle carries bytes only if IndexedDB storage failed; normally re-read here
+  let bytes = handle ? handle.bytes : null;
+  if (!bytes && handle) {
+    const buf = await getCachedAudio(handle.key);
+    if (buf) bytes = new Uint8Array(buf);
+    if (!isSessionActive(session)) return;
   }
 
-  // Await the pre-queued promise — resolves immediately if cached, waits if still generating
-  const audio = (allPromises && idx < allPromises.length)
-    ? await allPromises[idx]
-    : await genAudio(idx);
-
-  if (!ttsActive) return;
-  if (!audio) {
-    // Generation failed for this verse — skip it instead of stalling forever
-    playKokoroVerse(idx + 1, allPromises);
+  if (!bytes) {
+    // Generation/cache failed for this verse — skip it instead of stalling forever
+    playCtxVerse(session, ctx, idx + 1);
     return;
   }
 
-  const blob = new Blob([audio.toWav()], { type: "audio/wav" });
+  const blob = new Blob([bytes], { type: "audio/wav" });
   const url = URL.createObjectURL(blob);
   const audioEl = new Audio(url);
+  audioEl.playbackRate = voicePlaybackRate();
+  try { audioEl.preservesPitch = true; } catch {}
   currentAudioEl = audioEl;
 
   audioEl.onended = () => {
     URL.revokeObjectURL(url);
     currentAudioEl = null;
-    if (ttsActive) playKokoroVerse(idx + 1, allPromises);
+    if (isSessionActive(session)) playCtxVerse(session, ctx, idx + 1);
   };
   audioEl.onerror = () => {
     URL.revokeObjectURL(url);
     currentAudioEl = null;
-    if (ttsActive) playKokoroVerse(idx + 1, allPromises);
+    if (isSessionActive(session)) playCtxVerse(session, ctx, idx + 1);
   };
   audioEl.play().catch(err => {
     URL.revokeObjectURL(url);
@@ -735,50 +810,88 @@ async function playKokoroVerse(idx, allPromises) {
     if (err.name === "AbortError") return; // user stopped playback
     console.error("Audio play error:", err);
     // Autoplay/decode failure — advance rather than freeze mid-chapter
-    if (ttsActive) playKokoroVerse(idx + 1, allPromises);
+    if (isSessionActive(session)) playCtxVerse(session, ctx, idx + 1);
   });
 }
 
-// Entry point: pre-generate ALL chapter verses, then start playing
-async function startAiTTS(startIdx) {
-  // (whimsy + aiPreparing already set synchronously in startTTS before this call)
-  prefetchToken = null; // cancel any background prefetch — we take over generation
+// Seamless chapter/book transition: the next ctx's text was fetched and its
+// audio queued while the current chapter played, so this is usually instant.
+async function advanceSessionChapter(session, ctx) {
+  if (!isSessionActive(session)) return;
 
-  // Load whichever engine the active voice belongs to
-  const ok = state.aiEngine === "piper"
-    ? await ensurePiperVoice(activeAiVoiceId())
+  let next = ctx.nextCtx;
+  if (!next) {
+    // Lookahead didn't land (fetch failed or was too slow) — fetch now
+    let nb = ctx.bookIdx, nc = ctx.chapterNum + 1;
+    if (nc > BOOKS[nb].chapters) { nb += 1; nc = 1; }
+    if (nb >= BOOKS.length) { stopTTS(); return; } // finished Revelation
+    try {
+      const verses = await fetchChapterRetry(BOOKS[nb].abbr, nc, session.translation);
+      if (!isSessionActive(session)) return;
+      next = makeChapterCtx(nb, nc, verses);
+      queueChapterGeneration(session, next, 0);
+    } catch { stopTTS(); return; }
+  }
+
+  // Swap the reading UI to the new chapter and keep playing without a gap
+  state.bookIdx = next.bookIdx;
+  state.chapterIdx = next.chapterNum - 1;
+  state.verses = next.verses;
+  state.totalPages = Math.ceil(next.verses.length / VERSES_PER_PAGE);
+  state.page = 0;
+  state.speakingVerseIdx = 0;
+  state.loading = false;
+  render();
+
+  ensureNextChapterQueued(session, next); // keep the rolling lookahead going
+  playCtxVerse(session, next, 0);
+}
+
+// Entry point: buffer as large an initial block as possible, then start
+// playing while the pump keeps generating ahead until the user stops.
+async function startAiSession(session, startIdx) {
+  // (whimsy + aiPreparing already set synchronously in startTTS before this call)
+
+  // Load whichever engine the session voice belongs to
+  const ok = session.engine === "piper"
+    ? await ensurePiperVoice(session.voice)
     : !!(await loadKokoroModel());
-  if (!ok || !ttsActive) {
-    // Model failed or user cancelled — clean up completely
-    stopWhimsyTimer();
-    state.aiPreparing = false;
-    state.speaking = false;
-    ttsActive = false;
-    render();
+  if (!ok || !isSessionActive(session)) {
+    if (isSessionActive(session)) {
+      // Engine failed to load — tear down this session cleanly
+      stopWhimsyTimer();
+      state.aiPreparing = false;
+      state.speaking = false;
+      ttsActive = false;
+      ttsSession = null;
+      render();
+    }
     return;
   }
 
-  // Queue ALL chapter verses upfront — WASM serializes them one by one automatically.
-  // This keeps the generation pipeline always running ahead of playback.
-  const allPromises = state.verses.map((_, i) => genAudio(i));
+  // Queue the whole current chapter, then immediately start the rolling
+  // next-chapter lookahead so generation never idles.
+  const ctx = makeChapterCtx(state.bookIdx, state.chapterIdx + 1, state.verses);
+  queueChapterGeneration(session, ctx, startIdx);
+  ensureNextChapterQueued(session, ctx);
 
-  // Short buffer if starting verse is cached; longer if it needs generating
-  const firstKey = audioCacheKey(startIdx);
-  const isCached = !!(await getCachedAudio(firstKey));
-  const bufferMs = isCached ? 600 : 2000;
-
-  await Promise.all([
-    allPromises[startIdx],
-    new Promise(r => setTimeout(r, bufferMs)),
+  // Buffer the whole first page (or up to a time cap) before starting, but
+  // never start before the first verse itself is ready.
+  const blockEnd = Math.min(startIdx + VERSES_PER_PAGE, ctx.verses.length);
+  const firstCached = !!(await getCachedAudio(ctxCacheKey(session, ctx, startIdx)));
+  const capMs = firstCached ? 500 : 3000;
+  await Promise.race([
+    Promise.all(ctx.promises.slice(startIdx, blockEnd)),
+    new Promise(r => setTimeout(r, capMs)),
   ]);
+  await ctx.promises[startIdx];
 
+  if (!isSessionActive(session)) return;
   stopWhimsyTimer();
   state.aiPreparing = false;
   render();
 
-  if (!ttsActive) return;
-
-  playKokoroVerse(startIdx, allPromises);
+  playCtxVerse(session, ctx, startIdx);
 }
 
 function startTTS() {
@@ -788,11 +901,19 @@ function startTTS() {
   ttsActive = true;
   state.speaking = true;
   if (state.voiceMode === "ai") {
+    // Immutable session snapshot — generation NEVER reads live state
+    const session = {
+      token: ++_sessionCounter,
+      engine: state.aiEngine,
+      voice: activeAiVoiceId(),
+      translation: state.translation,
+    };
+    ttsSession = session;
     // Set preparing state SYNCHRONOUSLY here — guaranteed to render before any await
     startWhimsyTimer();
     state.aiPreparing = true;
     render();
-    startAiTTS(startIdx);
+    startAiSession(session, startIdx);
   } else {
     speakVerse(startIdx);
   }
@@ -808,8 +929,8 @@ function toggleTTS() {
 }
 
 // ── API ───────────────────────────────────────────────────────
-async function fetchChapter(bookAbbr, chapter) {
-  const t = state.translation;
+async function fetchChapter(bookAbbr, chapter, translation) {
+  const t = translation || state.translation;
   const url = `https://bible-api.com/${bookAbbr}+${chapter}?translation=${t}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -853,8 +974,6 @@ async function openChapter(bookIdx, chapterNum) {
     state.totalPages = Math.ceil(verses.length / VERSES_PER_PAGE);
     state.loading = false;
     render();
-    // Pre-cache all verses in background if AI voice model is already ready
-    if (state.voiceMode === "ai") prefetchChapterAudio();
   } catch (e) {
     state.loading = false;
     state.error = "Could not load passage. Check your connection.";
@@ -959,10 +1078,10 @@ document.addEventListener("keydown", (e) => {
       render();
     } else if (key === "ArrowRight") {
       const cur = s.options.indexOf(state[s.key]);
-      if (cur < s.options.length - 1) { state[s.key] = s.options[cur + 1]; render(); }
+      if (cur < s.options.length - 1) { state[s.key] = s.options[cur + 1]; onDisplaySettingChange(s.key); render(); }
     } else if (key === "ArrowLeft") {
       const cur = s.options.indexOf(state[s.key]);
-      if (cur > 0) { state[s.key] = s.options[cur - 1]; render(); }
+      if (cur > 0) { state[s.key] = s.options[cur - 1]; onDisplaySettingChange(s.key); render(); }
     } else if (key === "Enter" || key === "Escape") {
       navigate("home");
     }
@@ -1132,13 +1251,9 @@ function selectVoiceIdx(idx) {
       state.aiEngine = av.engine;
       state.aiVoiceId = av.id;
       if (av.engine === "piper") {
-        // Download the voice model now (if needed), then cache this chapter
-        ensurePiperVoice(av.id).then(ok => { if (ok) prefetchChapterAudio(); });
+        ensurePiperVoice(av.id); // download the voice model now if needed
       } else if (state.aiTtsStatus === "idle") {
         loadKokoroModel();
-      } else if (state.aiTtsStatus === "ready") {
-        // Model already downloaded → start caching this chapter with the new voice now
-        prefetchChapterAudio();
       }
     }
   }
@@ -1287,7 +1402,7 @@ function renderVoice() {
   const firstKokoroIdx = bvl.length;
   const aiStatus = state.aiTtsStatus;
   const aiSub = {
-    idle:    "~86 MB · one-time download",
+    idle:    `${KOKORO_SIZE_LABEL} · one-time download`,
     loading: `Downloading… ${state.aiTtsProgress}%`,
     ready:   "Downloaded · on-device",
     error:   "Failed · tap to retry",
@@ -1672,12 +1787,12 @@ function renderDisplay() {
           el("div", { class: "display-row-value" },
             el("span", {
               class: `display-arrow${cur > 0 ? "" : " dim"}`,
-              onclick: (e) => { e.stopPropagation(); if (cur > 0) { state[setting.key] = setting.options[cur - 1]; render(); } },
+              onclick: (e) => { e.stopPropagation(); if (cur > 0) { state[setting.key] = setting.options[cur - 1]; onDisplaySettingChange(setting.key); render(); } },
             }, "‹"),
             el("span", { class: "display-row-current" }, setting.labels[cur]),
             el("span", {
               class: `display-arrow${cur < setting.options.length - 1 ? "" : " dim"}`,
-              onclick: (e) => { e.stopPropagation(); if (cur < setting.options.length - 1) { state[setting.key] = setting.options[cur + 1]; render(); } },
+              onclick: (e) => { e.stopPropagation(); if (cur < setting.options.length - 1) { state[setting.key] = setting.options[cur + 1]; onDisplaySettingChange(setting.key); render(); } },
             }, "›"),
           ),
         );
