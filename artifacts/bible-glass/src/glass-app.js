@@ -339,19 +339,37 @@ async function loadKokoroModel() {
   _kokoroLoadPromise = (async () => {
     try {
       const { KokoroTTS } = await import("kokoro-js");
-      kokoroInstance = await KokoroTTS.from_pretrained(
-        "onnx-community/Kokoro-82M-v1.0-ONNX",
-        {
-          dtype: "q8",
-          device: "wasm",
-          progress_callback: (info) => {
-            if (info.status === "progress" && info.total > 0) {
-              state.aiTtsProgress = Math.round((info.loaded / info.total) * 100);
-              render();
-            }
-          },
+
+      const progressCb = (info) => {
+        if (info.status === "progress" && info.total > 0) {
+          state.aiTtsProgress = Math.round((info.loaded / info.total) * 100);
+          render();
         }
-      );
+      };
+
+      // WebGPU dispatches inference to the GPU — main thread stays responsive.
+      // WASM runs synchronously on the main thread and can freeze the page.
+      const hasWebGPU = typeof navigator !== "undefined" && !!navigator.gpu;
+      if (hasWebGPU) {
+        try {
+          kokoroInstance = await KokoroTTS.from_pretrained(
+            "onnx-community/Kokoro-82M-v1.0-ONNX",
+            { dtype: "q8", device: "webgpu", progress_callback: progressCb }
+          );
+        } catch (gpuErr) {
+          console.warn("WebGPU init failed, falling back to WASM:", gpuErr);
+          kokoroInstance = null;
+        }
+      }
+
+      // WASM fallback (or primary when no WebGPU)
+      if (!kokoroInstance) {
+        kokoroInstance = await KokoroTTS.from_pretrained(
+          "onnx-community/Kokoro-82M-v1.0-ONNX",
+          { dtype: "q8", device: "wasm", progress_callback: progressCb }
+        );
+      }
+
       state.aiTtsStatus = "ready";
       state.aiTtsProgress = 100;
       render();

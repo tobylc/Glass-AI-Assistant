@@ -338,7 +338,7 @@ html, body {
   border-color: var(--gold);
   color: var(--gold);
   transform: scale(0.94);
-  transition: transform 0.05s, background 0.05s;
+  transition: none;
 }
 
 .ctrl-btn.focused {
