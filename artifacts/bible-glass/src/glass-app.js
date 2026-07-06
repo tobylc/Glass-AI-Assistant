@@ -113,6 +113,7 @@ const state = {
   aiTtsStatus: "idle",     // "idle" | "loading" | "ready" | "error"
   aiTtsProgress: 0,        // 0–100 download progress
   aiVoiceId: "af_heart",   // Kokoro voice id
+  aiPreparing: false,      // true while pre-generating the first page batch
 };
 
 // ── TTS ───────────────────────────────────────────────────────
@@ -159,6 +160,7 @@ function stopTTS() {
   ttsActive = false;
   ttsQueue = [];
   state.speaking = false;
+  state.aiPreparing = false;
   state.speakingVerseIdx = -1;
   currentUtterance = null;
   render();
@@ -219,9 +221,11 @@ async function loadKokoroModel() {
   }
 }
 
-// Pre-generate next verse audio while current verse is playing (lookahead pipeline)
-async function generateVerseAudio(tts, idx) {
-  if (idx >= state.verses.length) return null;
+// ── AI (Kokoro) TTS pipeline ─────────────────────────────────
+
+// Generate one verse audio, resolves to null on failure
+async function genAudio(tts, idx) {
+  if (idx < 0 || idx >= state.verses.length) return null;
   try {
     return await tts.generate(state.verses[idx].text.trim(), {
       voice: state.aiVoiceId,
@@ -232,52 +236,80 @@ async function generateVerseAudio(tts, idx) {
   }
 }
 
-async function speakVerseWithKokoro(idx, pregenAudio = null) {
-  if (idx >= state.verses.length) { stopTTS(); return; }
+// Play a verse; audioPromises is the full pre-generated queue for the page batch
+async function playKokoroVerse(idx, pageStart, audioPromises) {
+  if (idx >= state.verses.length || !ttsActive) { stopTTS(); return; }
 
   state.speakingVerseIdx = idx;
   state.speaking = true;
   render();
 
+  const qIdx = idx - pageStart;
+  // Resolve from queue if available, otherwise generate on-the-fly
+  const audio = qIdx >= 0 && qIdx < audioPromises.length
+    ? await audioPromises[qIdx]
+    : await genAudio(kokoroInstance, idx);
+
+  if (!audio || !ttsActive) return;
+
+  // For verses beyond the pre-generated page, keep a 1-ahead lookahead
+  if (qIdx >= audioPromises.length - 1) {
+    audioPromises.push(genAudio(kokoroInstance, idx + 1));
+  }
+
+  const blob = new Blob([audio.toWav()], { type: "audio/wav" });
+  const url = URL.createObjectURL(blob);
+  const audioEl = new Audio(url);
+  currentAudioEl = audioEl;
+
+  audioEl.onended = () => {
+    URL.revokeObjectURL(url);
+    currentAudioEl = null;
+    if (ttsActive) playKokoroVerse(idx + 1, pageStart, audioPromises);
+  };
+  audioEl.onerror = () => {
+    URL.revokeObjectURL(url);
+    currentAudioEl = null;
+    if (ttsActive) playKokoroVerse(idx + 1, pageStart, audioPromises);
+  };
+  audioEl.play().catch(err => {
+    if (err.name !== "AbortError") console.error("Audio play error:", err);
+    URL.revokeObjectURL(url);
+    currentAudioEl = null;
+  });
+}
+
+// Entry point: pre-generate the whole current page in parallel, then start playing
+async function startKokoroTTS(startIdx) {
   const tts = await loadKokoroModel();
   if (!tts || !ttsActive) return;
 
-  try {
-    // Use pre-generated audio if available, otherwise generate now
-    const audio = pregenAudio ?? await generateVerseAudio(tts, idx);
-    if (!audio || !ttsActive) return;
+  // Show "Preparing…" while we pre-generate the full page batch
+  state.aiPreparing = true;
+  state.speaking = true;
+  render();
 
-    // Immediately kick off generation of the NEXT verse in the background
-    // so it's ready (or nearly ready) when this verse finishes playing
-    const nextAudioPromise = generateVerseAudio(tts, idx + 1);
+  // Kick off inference for ALL verses on this page simultaneously
+  const pageEnd = Math.min(startIdx + VERSES_PER_PAGE, state.verses.length);
+  const audioPromises = Array.from(
+    { length: pageEnd - startIdx },
+    (_, i) => genAudio(tts, startIdx + i)
+  );
 
-    const blob = new Blob([audio.toWav()], { type: "audio/wav" });
-    const url = URL.createObjectURL(blob);
-    const audioEl = new Audio(url);
-    currentAudioEl = audioEl;
+  // Wait for the first verse AND a minimum buffer so the rest are well underway
+  // The buffer gives verse 2-4 a head start — if they finish during playback,
+  // transitions are instant; if not, any remaining wait is tiny.
+  await Promise.all([
+    audioPromises[0],
+    new Promise(r => setTimeout(r, 2500)),
+  ]);
 
-    audioEl.onended = async () => {
-      URL.revokeObjectURL(url);
-      currentAudioEl = null;
-      if (!ttsActive) return;
-      // Await the pre-generated next verse — should already be done by now
-      const next = await nextAudioPromise;
-      if (ttsActive) speakVerseWithKokoro(idx + 1, next);
-    };
-    audioEl.onerror = () => {
-      URL.revokeObjectURL(url);
-      currentAudioEl = null;
-      if (ttsActive) speakVerseWithKokoro(idx + 1);
-    };
-    audioEl.play().catch(err => {
-      if (err.name !== "AbortError") console.error("Audio play error:", err);
-      URL.revokeObjectURL(url);
-      currentAudioEl = null;
-    });
-  } catch (err) {
-    console.error("Kokoro generate failed:", err);
-    if (ttsActive) speakVerseWithKokoro(idx + 1);
-  }
+  state.aiPreparing = false;
+  render();
+
+  if (!ttsActive) return;
+
+  playKokoroVerse(startIdx, startIdx, audioPromises);
 }
 
 function startTTS() {
@@ -286,7 +318,7 @@ function startTTS() {
   ttsActive = true;
   state.speaking = true;
   if (state.voiceMode === "ai") {
-    speakVerseWithKokoro(startIdx);
+    startKokoroTTS(startIdx);
   } else {
     speakVerse(startIdx);
   }
@@ -820,10 +852,10 @@ function renderReading() {
     );
   });
 
-  // TTS button icon/label — show AI loading state if applicable
+  // TTS button icon/label
   const aiLoading = state.voiceMode === "ai" && state.aiTtsStatus === "loading";
-  const ttsIcon = state.speaking ? "◼" : (aiLoading ? "⏳" : "♪");
-  const ttsLabel = state.speaking ? "Stop" : (aiLoading ? `${state.aiTtsProgress}%` : "Listen");
+  const ttsIcon = state.aiPreparing ? "⏳" : (state.speaking ? "◼" : (aiLoading ? "⏳" : "♪"));
+  const ttsLabel = state.aiPreparing ? "Preparing…" : (state.speaking ? "Stop" : (aiLoading ? `${state.aiTtsProgress}%` : "Listen"));
 
   // Pagination dots
   const dots = state.totalPages > 1
