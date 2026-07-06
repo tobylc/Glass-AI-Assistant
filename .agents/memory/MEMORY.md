@@ -1,0 +1,1 @@
+- [TTS audio cache poisoning](tts-audio-cache-poisoning.md) — snapshot cache key + generation inputs atomically before any await; bump the IndexedDB name to purge poisoned client caches.

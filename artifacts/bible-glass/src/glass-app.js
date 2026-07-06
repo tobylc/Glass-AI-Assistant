@@ -296,7 +296,9 @@ function getBestSystemVoice() {
     const v = voices.find(v => v.name === name);
     if (v) return v;
   }
-  return voices.find(v => v.lang && v.lang.startsWith("en")) || voices[0] || null;
+  // Only ever fall back to an English voice — a non-English utter.voice
+  // overrides utter.lang and would read the text with wrong phonetics
+  return voices.find(v => v.lang && v.lang.startsWith("en")) || null;
 }
 
 function stopTTS() {
@@ -471,8 +473,11 @@ async function loadKokoroModel() {
 
 function getAudioDb() {
   if (_audioDb) return _audioDb;
+  // v1 cache may contain audio generated with a mismatched voice (key/audio
+  // race before snapshotting was added) — delete it and start fresh
+  try { indexedDB.deleteDatabase("bible-tts-v1"); } catch {}
   _audioDb = new Promise(resolve => {
-    const req = indexedDB.open("bible-tts-v1", 1);
+    const req = indexedDB.open("bible-tts-v2", 1);
     req.onupgradeneeded = e => e.target.result.createObjectStore("verses");
     req.onsuccess = e => resolve(e.target.result);
     req.onerror = () => { _audioDb = null; resolve(null); };
@@ -480,10 +485,16 @@ function getAudioDb() {
   return _audioDb;
 }
 
+// Coerce any voice id to a valid English Kokoro voice
+function englishVoiceId(id) {
+  const v = KOKORO_VOICES.find(v => v.id === id);
+  return (v && (v.lang === "en-us" || v.lang === "en-gb")) ? id : "af_heart";
+}
+
 function audioCacheKey(idx) {
   if (!state.verses[idx]) return null;
   const abbr = BOOKS[state.bookIdx]?.abbr ?? "?";
-  return `${state.aiVoiceId}|${abbr}|${state.chapterIdx + 1}|${state.verses[idx].verse}`;
+  return `${state.translation}|${englishVoiceId(state.aiVoiceId)}|${abbr}|${state.chapterIdx + 1}|${state.verses[idx].verse}`;
 }
 
 async function getCachedAudio(key) {
@@ -512,16 +523,23 @@ function setCachedAudio(key, buffer) {
 
 // ── AI (Kokoro) TTS pipeline ─────────────────────────────────
 
-// Generate one verse audio with cache check + single-WASM semaphore
+// Generate one verse audio with cache check + single-WASM semaphore.
+// CRITICAL: voice, text, and cache key are snapshotted together at call time
+// so the stored audio ALWAYS matches its key — even if the user switches
+// voice/chapter/translation while this call is queued behind the semaphore.
 async function genAudio(tts, idx) {
   if (idx < 0 || idx >= state.verses.length) return null;
 
-  const key = audioCacheKey(idx);
+  const voice = englishVoiceId(state.aiVoiceId);
+  const text = state.verses[idx].text.trim();
+  const abbr = BOOKS[state.bookIdx]?.abbr ?? "?";
+  const key = `${state.translation}|${voice}|${abbr}|${state.chapterIdx + 1}|${state.verses[idx].verse}`;
+
   const cached = await getCachedAudio(key);
   if (cached) return { toWav: () => new Uint8Array(cached) };
 
   // Only one WASM generation at a time — queue up behind any active one
-  while (generationBusy) await new Promise(r => setTimeout(r, 60));
+  while (generationBusy) await new Promise(r => setTimeout(r, 25));
 
   // Re-check cache after waiting (another caller may have generated it)
   const cached2 = await getCachedAudio(key);
@@ -529,10 +547,7 @@ async function genAudio(tts, idx) {
 
   generationBusy = true;
   try {
-    const audio = await tts.generate(state.verses[idx].text.trim(), {
-      voice: state.aiVoiceId,
-      speed: 0.88,
-    });
+    const audio = await tts.generate(text, { voice, speed: 0.88 });
     const wav = audio.toWav();
     setCachedAudio(key, wav.buffer ?? wav);
     return audio;
@@ -545,7 +560,7 @@ async function prefetchChapterAudio() {
   const tts = kokoroInstance;
   if (!tts || state.aiTtsStatus !== "ready" || !state.verses.length) return;
 
-  const token = `${state.aiVoiceId}|${state.bookIdx}|${state.chapterIdx}`;
+  const token = `${state.translation}|${englishVoiceId(state.aiVoiceId)}|${state.bookIdx}|${state.chapterIdx}`;
   prefetchToken = token;
 
   for (let i = 0; i < state.verses.length; i++) {
@@ -594,7 +609,12 @@ async function playKokoroVerse(idx, allPromises) {
     ? await allPromises[idx]
     : await genAudio(kokoroInstance, idx);
 
-  if (!audio || !ttsActive) return;
+  if (!ttsActive) return;
+  if (!audio) {
+    // Generation failed for this verse — skip it instead of stalling forever
+    playKokoroVerse(idx + 1, allPromises);
+    return;
+  }
 
   const blob = new Blob([audio.toWav()], { type: "audio/wav" });
   const url = URL.createObjectURL(blob);
@@ -612,9 +632,12 @@ async function playKokoroVerse(idx, allPromises) {
     if (ttsActive) playKokoroVerse(idx + 1, allPromises);
   };
   audioEl.play().catch(err => {
-    if (err.name !== "AbortError") console.error("Audio play error:", err);
     URL.revokeObjectURL(url);
     currentAudioEl = null;
+    if (err.name === "AbortError") return; // user stopped playback
+    console.error("Audio play error:", err);
+    // Autoplay/decode failure — advance rather than freeze mid-chapter
+    if (ttsActive) playKokoroVerse(idx + 1, allPromises);
   });
 }
 
@@ -659,6 +682,7 @@ async function startKokoroTTS(startIdx) {
 
 function startTTS() {
   if (!state.verses.length) return;
+  resetToEnglishVoice(); // never start playback with a non-English voice
   const startIdx = state.page * VERSES_PER_PAGE;
   ttsActive = true;
   state.speaking = true;
@@ -1007,6 +1031,8 @@ function selectVoiceIdx(idx) {
       state.voiceMode = "ai";
       state.aiVoiceId = kv.id;
       if (state.aiTtsStatus === "idle") loadKokoroModel();
+      // Model already downloaded → start caching this chapter with the new voice now
+      else if (state.aiTtsStatus === "ready") prefetchChapterAudio();
     }
   }
   state.voiceLangFocused = false;
