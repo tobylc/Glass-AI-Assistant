@@ -196,7 +196,7 @@ const state = {
   searchResults: [],
   searchIdx: 0,
   searchLoading: false,
-  translation: "asv",   // active translation ID
+  translation: "web",   // active translation ID
   translationIdx: 0,    // focused row in translations screen
   voiceMode: "standard",   // "standard" | "ai"
   voiceIdx: 0,             // focused row in voice screen
