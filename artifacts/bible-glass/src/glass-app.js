@@ -219,9 +219,22 @@ async function loadKokoroModel() {
   }
 }
 
-async function speakVerseWithKokoro(idx) {
+// Pre-generate next verse audio while current verse is playing (lookahead pipeline)
+async function generateVerseAudio(tts, idx) {
+  if (idx >= state.verses.length) return null;
+  try {
+    return await tts.generate(state.verses[idx].text.trim(), {
+      voice: state.aiVoiceId,
+      speed: 0.88,
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function speakVerseWithKokoro(idx, pregenAudio = null) {
   if (idx >= state.verses.length) { stopTTS(); return; }
-  const verse = state.verses[idx];
+
   state.speakingVerseIdx = idx;
   state.speaking = true;
   render();
@@ -230,20 +243,26 @@ async function speakVerseWithKokoro(idx) {
   if (!tts || !ttsActive) return;
 
   try {
-    const audio = await tts.generate(verse.text.trim(), {
-      voice: state.aiVoiceId,
-      speed: 0.88,
-    });
-    if (!ttsActive) return;
+    // Use pre-generated audio if available, otherwise generate now
+    const audio = pregenAudio ?? await generateVerseAudio(tts, idx);
+    if (!audio || !ttsActive) return;
+
+    // Immediately kick off generation of the NEXT verse in the background
+    // so it's ready (or nearly ready) when this verse finishes playing
+    const nextAudioPromise = generateVerseAudio(tts, idx + 1);
 
     const blob = new Blob([audio.toWav()], { type: "audio/wav" });
     const url = URL.createObjectURL(blob);
     const audioEl = new Audio(url);
     currentAudioEl = audioEl;
-    audioEl.onended = () => {
+
+    audioEl.onended = async () => {
       URL.revokeObjectURL(url);
       currentAudioEl = null;
-      if (ttsActive) speakVerseWithKokoro(idx + 1);
+      if (!ttsActive) return;
+      // Await the pre-generated next verse — should already be done by now
+      const next = await nextAudioPromise;
+      if (ttsActive) speakVerseWithKokoro(idx + 1, next);
     };
     audioEl.onerror = () => {
       URL.revokeObjectURL(url);
@@ -251,7 +270,6 @@ async function speakVerseWithKokoro(idx) {
       if (ttsActive) speakVerseWithKokoro(idx + 1);
     };
     audioEl.play().catch(err => {
-      // AbortError = play() was interrupted by stop/pause — expected, not a real error
       if (err.name !== "AbortError") console.error("Audio play error:", err);
       URL.revokeObjectURL(url);
       currentAudioEl = null;
