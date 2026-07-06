@@ -652,15 +652,11 @@ html, body {
 }
 
 /* ── Voice Screen ── */
-.voice-list {
+.voice-fixed {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  margin-bottom: 8px;
-}
-
-.voice-group {
-  display: contents;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 .voice-divider {
@@ -676,6 +672,8 @@ html, body {
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
+  min-height: 62px;
+  box-sizing: border-box;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);

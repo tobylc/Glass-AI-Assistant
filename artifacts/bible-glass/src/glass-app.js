@@ -743,7 +743,7 @@ document.addEventListener("keydown", (e) => {
       if (state.listIdx === 0) { state.listIdx = 0; navigate("books"); }
       else if (state.listIdx === 1) { navigate("search"); }
       else if (state.listIdx === 2) { state.translationIdx = TRANSLATIONS.findIndex(t => t.id === state.translation); navigate("translations"); }
-      else if (state.listIdx === 3) { state.voiceIdx = currentVoiceIdx(); navigate("voice"); }
+      else if (state.listIdx === 3) { state.voiceIdx = currentVoiceIdx(); state.kokoroLang = (state.voiceMode === "ai" ? (KOKORO_VOICES.find(v => v.id === state.aiVoiceId)?.lang ?? "en-us") : "en-us"); navigate("voice"); }
       else { navigate("display"); }
     }
     return;
@@ -1045,7 +1045,7 @@ function renderHome() {
               if (i === 0) navigate("books");
               else if (i === 1) navigate("search");
               else if (i === 2) { state.translationIdx = TRANSLATIONS.findIndex(t => t.id === state.translation); navigate("translations"); }
-              else if (i === 3) { state.voiceIdx = currentVoiceIdx(); navigate("voice"); }
+              else if (i === 3) { state.voiceIdx = currentVoiceIdx(); state.kokoroLang = (state.voiceMode === "ai" ? (KOKORO_VOICES.find(v => v.id === state.aiVoiceId)?.lang ?? "en-us") : "en-us"); navigate("voice"); }
               else { navigate("display"); }
             }
           },
@@ -1100,7 +1100,8 @@ function renderTranslations() {
 }
 
 function renderVoice() {
-  const VISIBLE = 6;
+  const VOICE_ITEM_H = 66; // px per Kokoro row (min-height 62 + 4 gap)
+  const VISIBLE_KOKORO = 4;
   const fkv = filteredKokoroVoices();
   const activeIdx = currentVoiceIdx();
   const aiStatus = state.aiTtsStatus;
@@ -1111,47 +1112,50 @@ function renderVoice() {
     error:   "Failed · tap to retry",
   }[aiStatus];
 
-  // Current language info
+  // Language picker info
   const activeLang = KOKORO_LANGUAGES.find(l => l.id === state.kokoroLang) || KOKORO_LANGUAGES[0];
   const langIdx = KOKORO_LANGUAGES.indexOf(activeLang);
   const prevLang = KOKORO_LANGUAGES[(langIdx - 1 + KOKORO_LANGUAGES.length) % KOKORO_LANGUAGES.length];
   const nextLang = KOKORO_LANGUAGES[(langIdx + 1) % KOKORO_LANGUAGES.length];
 
-  // Voice items: Standard + filtered Kokoro
-  const kokoroItems = fkv.map((v, i) => ({
-    idx: i + 1,
-    label: v.name,
-    sub: `${v.gender} · ${v.note}`,
-    badge: i === 0 ? aiSub : null,
-    loading: i === 0 && aiStatus === "loading",
-    progress: state.aiTtsProgress,
-  }));
+  // Smooth translateY offset — keep focused voice centered in the viewport
+  const kokoroFocused = state.voiceIdx - 1; // 0-based index in fkv
+  const offset = (state.voiceIdx === 0 || state.voiceLangFocused)
+    ? 0
+    : Math.max(0, Math.min(kokoroFocused - 1, fkv.length - VISIBLE_KOKORO));
 
-  // Sliding window over Kokoro voices only (Standard always visible at top)
-  const kokoroOffset = Math.max(0, Math.min(state.voiceIdx - 2, fkv.length - (VISIBLE - 1)));
-  const visibleKokoro = kokoroItems.slice(kokoroOffset, kokoroOffset + VISIBLE - 1);
+  // ALL Kokoro rows (no slicing — stays in DOM for smooth scrolling)
+  const kokoroRows = fkv.map((v, i) => {
+    const itemIdx = i + 1;
+    const isActive = itemIdx === activeIdx;
+    const isFocused = itemIdx === state.voiceIdx && !state.voiceLangFocused;
+    return el("div", {
+      class: `voice-option${isFocused ? " focused" : ""}${isActive ? " active-voice" : ""}`,
+      onclick: () => { state.voiceIdx = itemIdx; selectVoiceIdx(itemIdx); },
+    },
+      el("div", { class: "voice-check" }, isActive ? "✓" : ""),
+      el("div", { class: "voice-info" },
+        el("div", { class: "voice-name" }, v.name),
+        el("div", { class: "voice-sub" }, `${v.gender} · ${v.note}`),
+        i === 0 ? el("div", { class: "voice-badge" }, aiSub) : null,
+        i === 0 && aiStatus === "loading"
+          ? el("div", { class: "voice-progress-bar" },
+              el("div", { class: "voice-progress-fill", style: `width:${state.aiTtsProgress}%` })
+            )
+          : null,
+      ),
+    );
+  });
 
-  // Language picker row
+  const kokoroScroll = el("div", { class: "list-scroll" }, ...kokoroRows);
+  kokoroScroll.style.transform = `translateY(-${offset * VOICE_ITEM_H}px)`;
+
   const langRow = el("div", {
     class: `voice-lang-row${state.voiceLangFocused ? " focused" : ""}`,
   },
-    el("span", {
-      class: "voice-lang-arrow",
-      onclick: () => {
-        state.kokoroLang = prevLang.id;
-        state.voiceIdx = 1;
-        render();
-      }
-    }, "‹"),
+    el("span", { class: "voice-lang-arrow", onclick: () => { state.kokoroLang = prevLang.id; state.voiceIdx = 1; render(); } }, "‹"),
     el("span", { class: "voice-lang-label" }, `${activeLang.flag} ${activeLang.label}`),
-    el("span", {
-      class: "voice-lang-arrow",
-      onclick: () => {
-        state.kokoroLang = nextLang.id;
-        state.voiceIdx = 1;
-        render();
-      }
-    }, "›"),
+    el("span", { class: "voice-lang-arrow", onclick: () => { state.kokoroLang = nextLang.id; state.voiceIdx = 1; render(); } }, "›"),
   );
 
   return el("div", { class: "screen active" },
@@ -1160,49 +1164,24 @@ function renderVoice() {
       el("div", { class: "screen-title" }, "Voice"),
       el("div", { class: "screen-subtitle" }, "Free · On-device"),
     ),
-    el("div", { class: "voice-list" },
-      // ── Instant Voices ──
+    // Fixed: Standard + language picker
+    el("div", { class: "voice-fixed" },
       el("div", { class: "voice-divider" }, "Instant · Browser"),
-      el("div", { class: "voice-group" },
-        el("div", {
-          class: `voice-option${state.voiceIdx === 0 && !state.voiceLangFocused ? " focused" : ""}${activeIdx === 0 ? " active-voice" : ""}`,
-          onclick: () => { state.voiceIdx = 0; selectVoiceIdx(0); }
-        },
-          el("div", { class: "voice-check" }, activeIdx === 0 ? "✓" : ""),
-          el("div", { class: "voice-info" },
-            el("div", { class: "voice-name" }, "Standard"),
-            el("div", { class: "voice-sub" }, "Browser built-in · instant"),
-          ),
-        )
+      el("div", {
+        class: `voice-option${state.voiceIdx === 0 && !state.voiceLangFocused ? " focused" : ""}${activeIdx === 0 ? " active-voice" : ""}`,
+        onclick: () => { state.voiceIdx = 0; selectVoiceIdx(0); },
+      },
+        el("div", { class: "voice-check" }, activeIdx === 0 ? "✓" : ""),
+        el("div", { class: "voice-info" },
+          el("div", { class: "voice-name" }, "Standard"),
+          el("div", { class: "voice-sub" }, "Browser built-in · instant"),
+        ),
       ),
-      // ── AI Voices · Kokoro ──
       el("div", { class: "voice-divider" }, "AI Voices · Kokoro"),
       langRow,
-      ...visibleKokoro.map(item => {
-        const isActive = item.idx === activeIdx;
-        const isFocused = item.idx === state.voiceIdx && !state.voiceLangFocused;
-        return el("div", { class: "voice-group" },
-          el("div", {
-            class: `voice-option${isFocused ? " focused" : ""}${isActive ? " active-voice" : ""}`,
-            onclick: () => { state.voiceIdx = item.idx; selectVoiceIdx(item.idx); }
-          },
-            el("div", { class: "voice-check" }, isActive ? "✓" : ""),
-            el("div", { class: "voice-info" },
-              el("div", { class: "voice-name" }, item.label),
-              el("div", { class: "voice-sub" }, item.sub),
-              item.badge
-                ? el("div", { class: "voice-badge" }, item.badge)
-                : null,
-              item.loading
-                ? el("div", { class: "voice-progress-bar" },
-                    el("div", { class: "voice-progress-fill", style: `width:${item.progress}%` })
-                  )
-                : null,
-            ),
-          )
-        );
-      })
     ),
+    // Scrollable: Kokoro voices with translateY
+    el("div", { class: "list-container" }, kokoroScroll),
     keysHint([
       { keys: ["↑↓"], label: "scroll" },
       { keys: ["←→"], label: state.voiceLangFocused ? "change lang" : "back / select" },
