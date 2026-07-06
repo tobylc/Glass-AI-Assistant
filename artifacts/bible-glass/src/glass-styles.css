@@ -770,6 +770,14 @@ html, body {
   font-size: 13px;
 }
 
+/* ── Whimsy count number in speak button ── */
+.ctrl-btn.whimsy-count .ctrl-btn-icon {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--gold);
+  line-height: 1;
+}
+
 /* ── TTS speaking indicator ── */
 .tts-bar {
   display: flex;

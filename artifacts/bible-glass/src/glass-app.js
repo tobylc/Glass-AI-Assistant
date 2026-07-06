@@ -87,6 +87,40 @@ const TRANSLATIONS = [
   { id: "webbe",  name: "World English Bible (British)",       year: "2000", note: "UK spelling" },
 ];
 
+// ── Whimsical preparing sequence (phrase ↔ countdown) ─────────
+const WHIMSY_SEQ = [
+  { t: "phrase", s: "Preparing" },
+  { t: "count",  s: "3" },
+  { t: "phrase", s: "Building layers" },
+  { t: "count",  s: "2" },
+  { t: "phrase", s: "Adding fishing line" },
+  { t: "count",  s: "1" },
+  { t: "phrase", s: "Saving dolphins" },
+  { t: "count",  s: "3" },
+  { t: "phrase", s: "Tuning frequencies" },
+  { t: "count",  s: "2" },
+  { t: "phrase", s: "Consulting the whales" },
+  { t: "count",  s: "1" },
+  { t: "phrase", s: "Polishing vowels" },
+  { t: "count",  s: "3" },
+  { t: "phrase", s: "Waking the neurons" },
+  { t: "count",  s: "2" },
+  { t: "phrase", s: "Herding syllables" },
+  { t: "count",  s: "1" },
+  { t: "phrase", s: "Aligning the stars" },
+  { t: "count",  s: "3" },
+  { t: "phrase", s: "Charging the crystals" },
+  { t: "count",  s: "2" },
+  { t: "phrase", s: "Untangling the grammar" },
+  { t: "count",  s: "1" },
+  { t: "phrase", s: "Befriending the bytes" },
+  { t: "count",  s: "3" },
+  { t: "phrase", s: "Warming up the vibes" },
+  { t: "count",  s: "2" },
+  { t: "phrase", s: "Almost there" },
+  { t: "count",  s: "1" },
+];
+
 // ── Kokoro voices ─────────────────────────────────────────────
 const KOKORO_VOICES = [
   { id: "af_heart",   name: "Heart",    accent: "American", gender: "Female", note: "Warm · default" },
@@ -130,6 +164,7 @@ const state = {
   aiTtsProgress: 0,        // 0–100 download progress
   aiVoiceId: "af_heart",   // Kokoro voice id
   aiPreparing: false,      // true while pre-generating the first page batch
+  whimsyStep: 0,           // index into WHIMSY_SEQ during preparing phase
 };
 
 // ── TTS ───────────────────────────────────────────────────────
@@ -139,6 +174,10 @@ let currentAudioEl = null;
 let ttsQueue = [];
 let ttsActive = false;
 let kokoroInstance = null;
+let whimsyTimer = null;
+let generationBusy = false;
+let prefetchToken = null;
+let _audioDb = null;
 
 // Load voices list asynchronously (Chrome/Edge need voiceschanged event)
 let cachedVoices = [];
@@ -177,8 +216,10 @@ function stopTTS() {
   ttsQueue = [];
   state.speaking = false;
   state.aiPreparing = false;
+  state.whimsyStep = 0;
   state.speakingVerseIdx = -1;
   currentUtterance = null;
+  if (whimsyTimer) { clearInterval(whimsyTimer); whimsyTimer = null; }
   render();
 }
 
@@ -227,6 +268,8 @@ async function loadKokoroModel() {
     state.aiTtsStatus = "ready";
     state.aiTtsProgress = 100;
     render();
+    // Kick off background prefetch for whatever chapter is currently open
+    prefetchChapterAudio();
     return kokoroInstance;
   } catch (err) {
     console.error("Kokoro load failed:", err);
@@ -237,19 +280,109 @@ async function loadKokoroModel() {
   }
 }
 
+// ── IndexedDB audio cache ─────────────────────────────────────
+
+function getAudioDb() {
+  if (_audioDb) return _audioDb;
+  _audioDb = new Promise(resolve => {
+    const req = indexedDB.open("bible-tts-v1", 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore("verses");
+    req.onsuccess = e => resolve(e.target.result);
+    req.onerror = () => { _audioDb = null; resolve(null); };
+  });
+  return _audioDb;
+}
+
+function audioCacheKey(idx) {
+  if (!state.verses[idx]) return null;
+  const abbr = BOOKS[state.bookIdx]?.abbr ?? "?";
+  return `${state.aiVoiceId}|${abbr}|${state.chapterIdx + 1}|${state.verses[idx].verse}`;
+}
+
+async function getCachedAudio(key) {
+  if (!key) return null;
+  try {
+    const db = await getAudioDb();
+    if (!db) return null;
+    return new Promise(resolve => {
+      const req = db.transaction("verses").objectStore("verses").get(key);
+      req.onsuccess = () => resolve(req.result ?? null);
+      req.onerror = () => resolve(null);
+    });
+  } catch { return null; }
+}
+
+function setCachedAudio(key, buffer) {
+  if (!key || !buffer) return;
+  getAudioDb().then(db => {
+    if (!db) return;
+    try {
+      const tx = db.transaction("verses", "readwrite");
+      tx.objectStore("verses").put(buffer, key);
+    } catch {}
+  });
+}
+
 // ── AI (Kokoro) TTS pipeline ─────────────────────────────────
 
-// Generate one verse audio, resolves to null on failure
+// Generate one verse audio with cache check + single-WASM semaphore
 async function genAudio(tts, idx) {
   if (idx < 0 || idx >= state.verses.length) return null;
+
+  const key = audioCacheKey(idx);
+  const cached = await getCachedAudio(key);
+  if (cached) return { toWav: () => new Uint8Array(cached) };
+
+  // Only one WASM generation at a time — queue up behind any active one
+  while (generationBusy) await new Promise(r => setTimeout(r, 60));
+
+  // Re-check cache after waiting (another caller may have generated it)
+  const cached2 = await getCachedAudio(key);
+  if (cached2) return { toWav: () => new Uint8Array(cached2) };
+
+  generationBusy = true;
   try {
-    return await tts.generate(state.verses[idx].text.trim(), {
+    const audio = await tts.generate(state.verses[idx].text.trim(), {
       voice: state.aiVoiceId,
       speed: 0.88,
     });
-  } catch {
-    return null;
+    const wav = audio.toWav();
+    setCachedAudio(key, wav.buffer ?? wav);
+    return audio;
+  } catch { return null; }
+  finally { generationBusy = false; }
+}
+
+// Background: silently pre-generate all verses for the current chapter
+async function prefetchChapterAudio() {
+  const tts = kokoroInstance;
+  if (!tts || state.aiTtsStatus !== "ready" || !state.verses.length) return;
+
+  const token = `${state.aiVoiceId}|${state.bookIdx}|${state.chapterIdx}`;
+  prefetchToken = token;
+
+  for (let i = 0; i < state.verses.length; i++) {
+    if (prefetchToken !== token) return; // chapter or voice changed
+    if (state.speaking) { await new Promise(r => setTimeout(r, 300)); i--; continue; }
+    await genAudio(tts, i); // no-op if already cached
+    await new Promise(r => setTimeout(r, 80)); // yield between verses
   }
+}
+
+// ── Whimsy countdown timer ────────────────────────────────────
+
+function startWhimsyTimer() {
+  state.whimsyStep = 0;
+  if (whimsyTimer) clearInterval(whimsyTimer);
+  whimsyTimer = setInterval(() => {
+    state.whimsyStep = (state.whimsyStep + 1) % WHIMSY_SEQ.length;
+    render();
+  }, 500);
+}
+
+function stopWhimsyTimer() {
+  if (whimsyTimer) { clearInterval(whimsyTimer); whimsyTimer = null; }
+  state.whimsyStep = 0;
 }
 
 // Play a verse; audioPromises is the full pre-generated queue for the page batch
@@ -261,14 +394,14 @@ async function playKokoroVerse(idx, pageStart, audioPromises) {
   render();
 
   const qIdx = idx - pageStart;
-  // Resolve from queue if available, otherwise generate on-the-fly
+  // Resolve from queue if available, otherwise generate on-the-fly (cache hit likely)
   const audio = qIdx >= 0 && qIdx < audioPromises.length
     ? await audioPromises[qIdx]
     : await genAudio(kokoroInstance, idx);
 
   if (!audio || !ttsActive) return;
 
-  // For verses beyond the pre-generated page, keep a 1-ahead lookahead
+  // Beyond the pre-generated page: push a 1-ahead promise (will hit cache if prefetched)
   if (qIdx >= audioPromises.length - 1) {
     audioPromises.push(genAudio(kokoroInstance, idx + 1));
   }
@@ -295,31 +428,38 @@ async function playKokoroVerse(idx, pageStart, audioPromises) {
   });
 }
 
-// Entry point: pre-generate the whole current page in parallel, then start playing
+// Entry point: pre-generate the current page, then start playing
 async function startKokoroTTS(startIdx) {
   const tts = await loadKokoroModel();
   if (!tts || !ttsActive) return;
 
-  // Show "Preparing…" while we pre-generate the full page batch
+  // Cancel background prefetch so WASM isn't contested during startup
+  prefetchToken = null;
+
+  // Start whimsy countdown animation
+  startWhimsyTimer();
   state.aiPreparing = true;
   state.speaking = true;
   render();
 
-  // Kick off inference for ALL verses on this page simultaneously
+  // Kick off inference for ALL verses on this page (cache hits resolve instantly)
   const pageEnd = Math.min(startIdx + VERSES_PER_PAGE, state.verses.length);
   const audioPromises = Array.from(
     { length: pageEnd - startIdx },
     (_, i) => genAudio(tts, startIdx + i)
   );
 
-  // Wait for the first verse AND a minimum buffer so the rest are well underway
-  // The buffer gives verse 2-4 a head start — if they finish during playback,
-  // transitions are instant; if not, any remaining wait is tiny.
+  // If verse 1 is already cached, short buffer (fast path); otherwise full buffer
+  const firstKey = audioCacheKey(startIdx);
+  const isCached = !!(await getCachedAudio(firstKey));
+  const bufferMs = isCached ? 800 : 2500;
+
   await Promise.all([
     audioPromises[0],
-    new Promise(r => setTimeout(r, 2500)),
+    new Promise(r => setTimeout(r, bufferMs)),
   ]);
 
+  stopWhimsyTimer();
   state.aiPreparing = false;
   render();
 
@@ -395,6 +535,8 @@ async function openChapter(bookIdx, chapterNum) {
     state.totalPages = Math.ceil(verses.length / VERSES_PER_PAGE);
     state.loading = false;
     render();
+    // Pre-cache all verses in background if AI voice model is already ready
+    if (state.voiceMode === "ai") prefetchChapterAudio();
   } catch (e) {
     state.loading = false;
     state.error = "Could not load passage. Check your connection.";
@@ -894,8 +1036,15 @@ function renderReading() {
 
   // TTS button icon/label
   const aiLoading = state.voiceMode === "ai" && state.aiTtsStatus === "loading";
-  const ttsIcon = state.aiPreparing ? "⏳" : (state.speaking ? "◼" : (aiLoading ? "⏳" : "♪"));
-  const ttsLabel = state.aiPreparing ? "Preparing…" : (state.speaking ? "Stop" : (aiLoading ? `${state.aiTtsProgress}%` : "Listen"));
+  const whimsyItem = WHIMSY_SEQ[state.whimsyStep % WHIMSY_SEQ.length];
+  const isWhimsyCount = state.aiPreparing && whimsyItem.t === "count";
+  const ttsIcon = state.aiPreparing
+    ? (isWhimsyCount ? whimsyItem.s : "·")
+    : (state.speaking ? "◼" : (aiLoading ? "⏳" : "♪"));
+  const ttsLabel = state.aiPreparing
+    ? (isWhimsyCount ? "" : whimsyItem.s)
+    : (state.speaking ? "Stop" : (aiLoading ? `${state.aiTtsProgress}%` : "Listen"));
+  const ttsWhimsyCount = isWhimsyCount;
 
   // Pagination dots
   const dots = state.totalPages > 1
@@ -936,7 +1085,7 @@ function renderReading() {
             )]
           : []),
         el("div", {
-          class: `ctrl-btn${state.readingFocus === "speak" ? " focused" : ""}${state.speaking ? " active" : ""}`,
+          class: `ctrl-btn${state.readingFocus === "speak" ? " focused" : ""}${state.speaking ? " active" : ""}${ttsWhimsyCount ? " whimsy-count" : ""}`,
           onclick: toggleTTS
         },
           el("span", { class: "ctrl-btn-icon" }, ttsIcon),
