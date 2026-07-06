@@ -250,7 +250,12 @@ async function speakVerseWithKokoro(idx) {
       currentAudioEl = null;
       if (ttsActive) speakVerseWithKokoro(idx + 1);
     };
-    audioEl.play();
+    audioEl.play().catch(err => {
+      // AbortError = play() was interrupted by stop/pause — expected, not a real error
+      if (err.name !== "AbortError") console.error("Audio play error:", err);
+      URL.revokeObjectURL(url);
+      currentAudioEl = null;
+    });
   } catch (err) {
     console.error("Kokoro generate failed:", err);
     if (ttsActive) speakVerseWithKokoro(idx + 1);
