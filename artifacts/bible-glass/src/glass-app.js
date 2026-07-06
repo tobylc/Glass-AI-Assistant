@@ -178,6 +178,7 @@ let whimsyTimer = null;
 let generationBusy = false;
 let prefetchToken = null;
 let _audioDb = null;
+let nextChapterDataCache = null; // { bookIdx, chapterNum, verses } prefetched ahead
 
 // Load voices list asynchronously (Chrome/Edge need voiceschanged event)
 let cachedVoices = [];
@@ -223,13 +224,83 @@ function stopTTS() {
   render();
 }
 
+// ── Continuous playback: advance to next chapter / book ───────
+async function prefetchNextChapterData() {
+  const book = BOOKS[state.bookIdx];
+  let nextBookIdx = state.bookIdx;
+  let nextChapter = state.chapterIdx + 2; // 1-based
+  if (nextChapter > book.chapters) { nextBookIdx++; nextChapter = 1; }
+  if (nextBookIdx >= BOOKS.length) return;
+  try {
+    const verses = await fetchChapter(BOOKS[nextBookIdx].abbr, nextChapter);
+    nextChapterDataCache = { bookIdx: nextBookIdx, chapterNum: nextChapter, verses };
+  } catch {}
+}
+
+async function continueTTS() {
+  if (!ttsActive) return;
+
+  const book = BOOKS[state.bookIdx];
+  let nextBookIdx = state.bookIdx;
+  let nextChapter = state.chapterIdx + 2; // 1-based
+  if (nextChapter > book.chapters) { nextBookIdx++; nextChapter = 1; }
+  if (nextBookIdx >= BOOKS.length) { stopTTS(); return; }
+
+  // Use prefetched text if available, otherwise fetch now (brief loading flash)
+  let verses;
+  const hit = nextChapterDataCache;
+  if (hit && hit.bookIdx === nextBookIdx && hit.chapterNum === nextChapter) {
+    verses = hit.verses;
+    nextChapterDataCache = null;
+  } else {
+    state.loading = true;
+    render();
+    try { verses = await fetchChapter(BOOKS[nextBookIdx].abbr, nextChapter); }
+    catch { stopTTS(); return; }
+  }
+
+  if (!ttsActive) return;
+
+  state.bookIdx = nextBookIdx;
+  state.chapterIdx = nextChapter - 1;
+  state.verses = verses;
+  state.totalPages = Math.ceil(verses.length / VERSES_PER_PAGE);
+  state.page = 0;
+  state.speakingVerseIdx = 0;
+  state.loading = false;
+  render();
+
+  // Start background prefetch for the new chapter's audio
+  prefetchChapterAudio();
+
+  if (state.voiceMode === "ai") {
+    // Queue page-1 generation (instant if prefetched)
+    const pageEnd = Math.min(VERSES_PER_PAGE, verses.length);
+    const audioPromises = Array.from({ length: pageEnd }, (_, i) => genAudio(kokoroInstance, i));
+    playKokoroVerse(0, 0, audioPromises);
+  } else {
+    speakVerse(0);
+  }
+}
+
 // ── Standard (browser) TTS ────────────────────────────────────
 function speakVerse(idx) {
-  if (idx >= state.verses.length) { stopTTS(); return; }
+  if (idx >= state.verses.length) { if (ttsActive) continueTTS(); return; }
+  if (!ttsActive) return;
+
+  // Keep display page in sync with spoken verse
+  const newPage = Math.floor(idx / VERSES_PER_PAGE);
+  if (newPage !== state.page) state.page = newPage;
+
   const verse = state.verses[idx];
   state.speakingVerseIdx = idx;
   state.speaking = true;
   render();
+
+  // Pre-fetch next chapter text when starting the last page
+  if (idx === Math.max(0, state.verses.length - VERSES_PER_PAGE)) {
+    prefetchNextChapterData();
+  }
 
   const utter = new SpeechSynthesisUtterance(verse.text);
   utter.rate = 0.90;
@@ -387,11 +458,21 @@ function stopWhimsyTimer() {
 
 // Play a verse; audioPromises is the full pre-generated queue for the page batch
 async function playKokoroVerse(idx, pageStart, audioPromises) {
-  if (idx >= state.verses.length || !ttsActive) { stopTTS(); return; }
+  if (idx >= state.verses.length) { if (ttsActive) continueTTS(); return; }
+  if (!ttsActive) return;
+
+  // Keep display page in sync with spoken verse
+  const newPage = Math.floor(idx / VERSES_PER_PAGE);
+  if (newPage !== state.page) state.page = newPage;
 
   state.speakingVerseIdx = idx;
   state.speaking = true;
   render();
+
+  // Pre-fetch next chapter text when starting the last page of this chapter
+  if (idx === Math.max(0, state.verses.length - VERSES_PER_PAGE)) {
+    prefetchNextChapterData();
+  }
 
   const qIdx = idx - pageStart;
   // Resolve from queue if available, otherwise generate on-the-fly (cache hit likely)
