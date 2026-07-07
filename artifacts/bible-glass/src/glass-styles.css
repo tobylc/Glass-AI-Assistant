@@ -113,9 +113,10 @@ html, body {
 }
 
 .home-cross {
-  font-size: 36px;
-  color: var(--gold);
-  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 10px;
   line-height: 1;
 }
 

@@ -1326,7 +1326,25 @@ function renderHome() {
 
   return el("div", { class: "screen active" },
     el("div", { class: "home-brand" },
-      el("div", { class: "home-cross" }, "✝"),
+      el("div", { class: "home-cross" },
+        (() => {
+          const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+          svg.setAttribute("viewBox", "0 0 80 32");
+          svg.setAttribute("width", "80");
+          svg.setAttribute("height", "32");
+          svg.setAttribute("fill", "none");
+          svg.innerHTML = `
+            <rect x="2" y="6" width="28" height="20" rx="10" ry="10" stroke="#c9a84c" stroke-width="2.5" fill="none"/>
+            <rect x="50" y="6" width="28" height="20" rx="10" ry="10" stroke="#c9a84c" stroke-width="2.5" fill="none"/>
+            <path d="M30 16 Q40 13 50 16" stroke="#c9a84c" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+            <path d="M2 12 Q-2 8 0 4" stroke="#c9a84c" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <path d="M78 12 Q82 8 80 4" stroke="#c9a84c" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <circle cx="16" cy="16" r="3" fill="#c9a84c" opacity="0.25"/>
+            <circle cx="64" cy="16" r="3" fill="#c9a84c" opacity="0.25"/>
+          `;
+          return svg;
+        })()
+      ),
       el("div", { class: "home-title" }, "Display BIBLE"),
       el("div", { class: "home-tagline" }, activeTrans.name),
       el("div", { class: "home-menu" },
