@@ -19,7 +19,7 @@ run = "pnpm --filter @workspace/bible-glass run dev"
 
 [services.production]
 build = [ "pnpm", "--filter", "@workspace/bible-glass", "run", "build" ]
-publicDir = "artifacts/bible-glass/dist/public"
+publicDir = "dist/public"
 serve = "static"
 
 [[services.production.rewrites]]
