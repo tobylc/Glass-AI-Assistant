@@ -1327,7 +1327,7 @@ function renderHome() {
   return el("div", { class: "screen active" },
     el("div", { class: "home-brand" },
       el("div", { class: "home-cross" }, "✝"),
-      el("div", { class: "home-title" }, "Holy Bible"),
+      el("div", { class: "home-title" }, "Display BIBLE"),
       el("div", { class: "home-tagline" }, activeTrans.name),
       el("div", { class: "home-menu" },
         ...items.map((item, i) =>
